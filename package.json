@@ -52,7 +52,6 @@
     "trailingComma": "all"
   },
   "dependencies": {
-    "@solana/web3.js": "^0.71.10",
     "bn.js": "^5.1.2",
     "buffer-layout": "^1.2.0"
   },
@@ -61,5 +60,17 @@
     "not dead",
     "not op_mini all",
     "maintained node versions"
-  ]
+  ],
+  "react-native": {
+    "console": "console-browserify",
+    "path": "path-browserify",
+    "fs": "react-native-level-fs",
+    "dgram": "react-native-udp"
+  },
+  "browser": {
+    "console": "console-browserify",
+    "path": "path-browserify",
+    "fs": "react-native-level-fs",
+    "dgram": "react-native-udp"
+  }
 }
