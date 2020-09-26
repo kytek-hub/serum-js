@@ -2,7 +2,8 @@
 import { Slab } from './slab';
 import BN from 'bn.js';
 import { Account, AccountInfo, Connection, PublicKey, Transaction, TransactionInstruction } from '@solana/web3.js';
-export declare const MARKET_STATE_LAYOUT: any;
+export declare const _MARKET_STAT_LAYOUT_V1: any;
+export declare const _MARKET_STATE_LAYOUT_V2: any;
 export declare class Market {
     private _decoded;
     private _baseSplTokenDecimals;
@@ -11,9 +12,11 @@ export declare class Market {
     private _confirmations;
     private _programId;
     private _openOrdersAccountsCache;
+    private _feeDiscountKeysCache;
     constructor(decoded: any, baseMintDecimals: number, quoteMintDecimals: number, options: MarketOptions | undefined, programId: PublicKey);
-    static get LAYOUT(): any;
+    static getLayout(programId: PublicKey): any;
     static load(connection: Connection, address: PublicKey, options: MarketOptions | undefined, programId: PublicKey): Promise<Market>;
+    get programId(): PublicKey;
     get address(): PublicKey;
     get publicKey(): PublicKey;
     get baseMintAddress(): PublicKey;
@@ -28,25 +31,42 @@ export declare class Market {
         pubkey: PublicKey;
         account: AccountInfo<Buffer>;
     }>>;
+    getTokenAccountsByOwnerForMint(connection: Connection, ownerAddress: PublicKey, mintAddress: PublicKey): Promise<Array<{
+        pubkey: PublicKey;
+        account: AccountInfo<Buffer>;
+    }>>;
     findQuoteTokenAccountsForOwner(connection: Connection, ownerAddress: PublicKey, includeUnwrappedSol?: boolean): Promise<{
         pubkey: PublicKey;
         account: AccountInfo<Buffer>;
     }[]>;
     findOpenOrdersAccountsForOwner(connection: Connection, ownerAddress: PublicKey, cacheDurationMs?: number): Promise<OpenOrders[]>;
-    placeOrder(connection: Connection, { owner, payer, side, price, size, orderType, clientId, }: OrderParams): Promise<string>;
-    makePlaceOrderTransaction<T extends PublicKey | Account>(connection: Connection, { owner, payer, side, price, size, orderType, clientId, }: OrderParams<T>, cacheDurationMs?: number): Promise<{
+    placeOrder(connection: Connection, { owner, payer, side, price, size, orderType, clientId, openOrdersAddressKey, feeDiscountPubkey, }: OrderParams): Promise<string>;
+    getSplTokenBalanceFromAccountInfo(accountInfo: AccountInfo<Buffer>, decimals: number): number;
+    get supportsSrmFeeDiscounts(): boolean;
+    get supportsReferralFees(): boolean;
+    findFeeDiscountKeys(connection: Connection, ownerAddress: PublicKey, cacheDurationMs?: number): Promise<Array<{
+        pubkey: PublicKey;
+        feeTier: number;
+        balance: number;
+        mint: PublicKey;
+    }>>;
+    findBestFeeDiscountKey(connection: Connection, ownerAddress: PublicKey, cacheDurationMs?: number): Promise<{
+        pubkey: PublicKey | null;
+        feeTier: number;
+    }>;
+    makePlaceOrderTransaction<T extends PublicKey | Account>(connection: Connection, { owner, payer, side, price, size, orderType, clientId, openOrdersAddressKey, feeDiscountPubkey, }: OrderParams<T>, cacheDurationMs?: number, feeDiscountPubkeyCacheDurationMs?: number): Promise<{
         transaction: Transaction;
         signers: (Account | T)[];
     }>;
-    makePlaceOrderInstruction<T extends PublicKey | Account>(connection: Connection, { owner, payer, side, price, size, orderType, clientId, }: OrderParams<T>, openOrdersAddress: any): TransactionInstruction;
+    makePlaceOrderInstruction<T extends PublicKey | Account>(connection: Connection, { owner, payer, side, price, size, orderType, clientId, openOrdersAddressKey, feeDiscountPubkey, }: OrderParams<T>): TransactionInstruction;
     private _sendTransaction;
     cancelOrderByClientId(connection: Connection, owner: Account, openOrders: PublicKey, clientId: BN): Promise<string>;
     makeCancelOrderByClientIdTransaction(connection: Connection, owner: PublicKey, openOrders: PublicKey, clientId: BN): Promise<Transaction>;
     cancelOrder(connection: Connection, owner: Account, order: Order): Promise<string>;
     makeCancelOrderTransaction(connection: Connection, owner: PublicKey, order: Order): Promise<Transaction>;
     makeCancelOrderInstruction(connection: Connection, owner: PublicKey, order: Order): TransactionInstruction;
-    settleFunds(connection: Connection, owner: Account, openOrders: OpenOrders, baseWallet: PublicKey, quoteWallet: PublicKey): Promise<string>;
-    makeSettleFundsTransaction(connection: Connection, openOrders: OpenOrders, baseWallet: PublicKey, quoteWallet: PublicKey): Promise<{
+    settleFunds(connection: Connection, owner: Account, openOrders: OpenOrders, baseWallet: PublicKey, quoteWallet: PublicKey, referrerQuoteWallet?: PublicKey | null): Promise<string>;
+    makeSettleFundsTransaction(connection: Connection, openOrders: OpenOrders, baseWallet: PublicKey, quoteWallet: PublicKey, referrerQuoteWallet?: PublicKey | null): Promise<{
         transaction: Transaction;
         signers: [PublicKey | Account];
     }>;
@@ -81,8 +101,11 @@ export interface OrderParams<T = Account> {
     size: number;
     orderType?: 'limit' | 'ioc' | 'postOnly';
     clientId?: BN;
+    openOrdersAddressKey?: PublicKey;
+    feeDiscountPubkey?: PublicKey | null;
 }
-export declare const OPEN_ORDERS_LAYOUT: any;
+export declare const _OPEN_ORDERS_LAYOUT_V1: any;
+export declare const _OPEN_ORDERS_LAYOUT_V2: any;
 export declare class OpenOrders {
     private _programId;
     address: PublicKey;
@@ -95,7 +118,7 @@ export declare class OpenOrders {
     orders: BN[];
     clientIds: BN[];
     constructor(address: PublicKey, decoded: any, programId: PublicKey);
-    static get LAYOUT(): any;
+    static getLayout(programId: PublicKey): any;
     static findForOwner(connection: Connection, ownerAddress: PublicKey, programId: PublicKey): Promise<OpenOrders[]>;
     static findForMarketAndOwner(connection: Connection, marketAddress: PublicKey, ownerAddress: PublicKey, programId: PublicKey): Promise<OpenOrders[]>;
     static load(connection: Connection, address: PublicKey, programId: PublicKey): Promise<OpenOrders>;

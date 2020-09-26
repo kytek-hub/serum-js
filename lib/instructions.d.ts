@@ -2,6 +2,8 @@ export function encodeInstruction(instruction: any): Buffer;
 export function decodeInstruction(message: any): any;
 export const SETTLE_FUNDS_BASE_WALLET_INDEX: 5;
 export const SETTLE_FUNDS_QUOTE_WALLET_INDEX: 6;
+export const NEW_ORDER_OPEN_ORDERS_INDEX: 1;
+export const NEW_ORDER_OWNER_INDEX: 4;
 export const INSTRUCTION_LAYOUT: VersionedLayout;
 export class DexInstructions {
     static initializeMarket({ market, requestQueue, eventQueue, bids, asks, baseVault, quoteVault, baseMint, quoteMint, baseLotSize, quoteLotSize, feeRateBps, vaultSignerNonce, quoteDustThreshold, programId, }: {
@@ -21,7 +23,7 @@ export class DexInstructions {
         quoteDustThreshold: any;
         programId: any;
     }): TransactionInstruction;
-    static newOrder({ market, openOrders, payer, owner, requestQueue, baseVault, quoteVault, side, limitPrice, maxQuantity, orderType, clientId, programId, }: {
+    static newOrder({ market, openOrders, payer, owner, requestQueue, baseVault, quoteVault, side, limitPrice, maxQuantity, orderType, clientId, programId, feeDiscountPubkey, }: {
         market: any;
         openOrders: any;
         payer: any;
@@ -35,6 +37,7 @@ export class DexInstructions {
         orderType: any;
         clientId: any;
         programId: any;
+        feeDiscountPubkey?: any;
     }): TransactionInstruction;
     static matchOrders({ market, requestQueue, eventQueue, bids, asks, baseVault, quoteVault, limit, programId, }: {
         market: any;
@@ -72,7 +75,7 @@ export class DexInstructions {
         clientId: any;
         programId: any;
     }): TransactionInstruction;
-    static settleFunds({ market, openOrders, owner, baseVault, quoteVault, baseWallet, quoteWallet, vaultSigner, programId, }: {
+    static settleFunds({ market, openOrders, owner, baseVault, quoteVault, baseWallet, quoteWallet, vaultSigner, programId, referrerQuoteWallet, }: {
         market: any;
         openOrders: any;
         owner: any;
@@ -82,6 +85,7 @@ export class DexInstructions {
         quoteWallet: any;
         vaultSigner: any;
         programId: any;
+        referrerQuoteWallet?: any;
     }): TransactionInstruction;
 }
 import { VersionedLayout } from "./layout";

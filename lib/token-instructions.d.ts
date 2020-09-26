@@ -33,10 +33,21 @@ export function closeAccount({ source, destination, owner }: {
     destination: any;
     owner: any;
 }): TransactionInstruction;
+export const INITIALIZE_ACCOUNT_ACCOUNT_INDEX: 0;
+export const INITIALIZE_ACCOUNT_MINT_INDEX: 1;
+export const INITIALIZE_ACCOUNT_OWNER_INDEX: 2;
+export const TRANSFER_SOURCE_INDEX: 0;
+export const TRANSFER_DESTINATION_INDEX: 1;
+export const TRANSFER_OWNER_INDEX: 2;
+export const CLOSE_ACCOUNT_SOURCE_INDEX: 0;
+export const CLOSE_ACCOUNT_DESTINATION_INDEX: 1;
+export const CLOSE_ACCOUNT_OWNER_INDEX: 2;
 export const TOKEN_PROGRAM_ID: PublicKey;
 export const WRAPPED_SOL_MINT: PublicKey;
-export const SRM_MINT: PublicKey;
 export const MSRM_MINT: PublicKey;
+export const MSRM_DECIMALS: 0;
+export const SRM_MINT: PublicKey;
+export const SRM_DECIMALS: 6;
 import { TransactionInstruction } from "@solana/web3.js";
 import { PublicKey } from "@solana/web3.js";
 //# sourceMappingURL=token-instructions.d.ts.map

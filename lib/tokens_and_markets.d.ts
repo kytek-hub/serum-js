@@ -1,4 +1,5 @@
 import { PublicKey } from '@solana/web3.js';
+export declare function getLayoutVersion(programId: PublicKey): 1 | 2;
 export declare const TOKEN_MINTS: Array<{
     address: PublicKey;
     name: string;
