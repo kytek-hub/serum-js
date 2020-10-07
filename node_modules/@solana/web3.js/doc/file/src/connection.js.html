@@ -30,6 +30,7 @@
   <ul>
     
   <li data-ice="doc"><span data-ice="kind" class="kind-class">C</span><span data-ice="name"><span><a href="class/src/account.js~Account.html">Account</a></span></span></li>
+<li data-ice="doc"><span data-ice="kind" class="kind-class">C</span><span data-ice="name"><span><a href="class/src/agent-manager.js~AgentManager.html">AgentManager</a></span></span></li>
 <li data-ice="doc"><span data-ice="kind" class="kind-class">C</span><span data-ice="name"><span><a href="class/src/bpf-loader.js~BpfLoader.html">BpfLoader</a></span></span></li>
 <li data-ice="doc"><span data-ice="kind" class="kind-class">C</span><span data-ice="name"><span><a href="class/src/connection.js~Connection.html">Connection</a></span></span></li>
 <li data-ice="doc"><span data-ice="kind" class="kind-class">C</span><span data-ice="name"><span><a href="class/src/loader.js~Loader.html">Loader</a></span></span></li>
@@ -54,6 +55,7 @@
 <li data-ice="doc"><span data-ice="kind" class="kind-function">F</span><span data-ice="name"><span><a href="function/index.html#static-function-publicKey">publicKey</a></span></span></li>
 <li data-ice="doc"><span data-ice="kind" class="kind-function">F</span><span data-ice="name"><span><a href="function/index.html#static-function-rustString">rustString</a></span></span></li>
 <li data-ice="doc"><span data-ice="kind" class="kind-function">F</span><span data-ice="name"><span><a href="function/index.html#static-function-uint64">uint64</a></span></span></li>
+<li data-ice="doc"><span data-ice="kind" class="kind-variable">V</span><span data-ice="name"><span><a href="variable/index.html#static-variable-DESTROY_TIMEOUT_MS">DESTROY_TIMEOUT_MS</a></span></span></li>
 <li data-ice="doc"><span data-ice="kind" class="kind-variable">V</span><span data-ice="name"><span><a href="variable/index.html#static-variable-BPF_LOADER_DEPRECATED_PROGRAM_ID">BPF_LOADER_DEPRECATED_PROGRAM_ID</a></span></span></li>
 <li data-ice="doc"><span data-ice="kind" class="kind-variable">V</span><span data-ice="name"><span><a href="variable/index.html#static-variable-BPF_LOADER_PROGRAM_ID">BPF_LOADER_PROGRAM_ID</a></span></span></li>
 <li data-ice="doc"><span data-ice="kind" class="kind-variable">V</span><span data-ice="name"><span><a href="variable/index.html#static-variable-BLOCKHASH_CACHE_TIMEOUT_MS">BLOCKHASH_CACHE_TIMEOUT_MS</a></span></span></li>
@@ -104,6 +106,7 @@
 <li data-ice="doc"><span data-ice="kind" class="kind-typedef">T</span><span data-ice="name"><span><a href="typedef/index.html#static-typedef-SignatureStatus">SignatureStatus</a></span></span></li>
 <li data-ice="doc"><span data-ice="kind" class="kind-typedef">T</span><span data-ice="name"><span><a href="typedef/index.html#static-typedef-SignatureStatusConfig">SignatureStatusConfig</a></span></span></li>
 <li data-ice="doc"><span data-ice="kind" class="kind-typedef">T</span><span data-ice="name"><span><a href="typedef/index.html#static-typedef-SlotInfo">SlotInfo</a></span></span></li>
+<li data-ice="doc"><span data-ice="kind" class="kind-typedef">T</span><span data-ice="name"><span><a href="typedef/index.html#static-typedef-StakeActivationData">StakeActivationData</a></span></span></li>
 <li data-ice="doc"><span data-ice="kind" class="kind-typedef">T</span><span data-ice="name"><span><a href="typedef/index.html#static-typedef-Supply">Supply</a></span></span></li>
 <li data-ice="doc"><span data-ice="kind" class="kind-typedef">T</span><span data-ice="name"><span><a href="typedef/index.html#static-typedef-TokenAccountBalancePair">TokenAccountBalancePair</a></span></span></li>
 <li data-ice="doc"><span data-ice="kind" class="kind-typedef">T</span><span data-ice="name"><span><a href="typedef/index.html#static-typedef-TokenAmount">TokenAmount</a></span></span></li>
@@ -183,6 +186,7 @@ import type {Blockhash} from &apos;./blockhash&apos;;
 import type {FeeCalculator} from &apos;./fee-calculator&apos;;
 import type {Account} from &apos;./account&apos;;
 import type {TransactionSignature} from &apos;./transaction&apos;;
+import {AgentManager} from &apos;./agent-manager&apos;;
 
 export const BLOCKHASH_CACHE_TIMEOUT_MS = 30 * 1000;
 
@@ -211,9 +215,11 @@ type Context = {
  *
  * @typedef {Object} SendOptions
  * @property {boolean | undefined} skipPreflight disable transaction verification step
+ * @property {Commitment | undefined} preflightCommitment preflight commitment level
  */
 export type SendOptions = {
   skipPreflight?: boolean,
+  preflightCommitment?: Commitment,
 };
 
 /**
@@ -222,10 +228,12 @@ export type SendOptions = {
  * @typedef {Object} ConfirmOptions
  * @property {boolean | undefined} skipPreflight disable transaction verification step
  * @property {Commitment | undefined} commitment desired commitment level
+ * @property {Commitment | undefined} preflightCommitment preflight commitment level
  */
 export type ConfirmOptions = {
   skipPreflight?: boolean,
   commitment?: Commitment,
+  preflightCommitment?: Commitment,
 };
 
 /**
@@ -508,8 +516,9 @@ const SignatureStatusResult = struct({err: TransactionErrorResult});
  * @typedef {Object} Version
  * @property {string} solana-core Version of solana-core
  */
-const Version = struct({
+const Version = struct.pick({
   &apos;solana-core&apos;: &apos;string&apos;,
+  &apos;feature-set&apos;: &apos;number?&apos;,
 });
 
 type SimulatedTransactionResponse = {
@@ -531,12 +540,14 @@ const SimulatedTransactionResponseValidator = jsonRpcResultAndContext(
  * @property {number} fee The fee charged for processing the transaction
  * @property {Array&lt;number&gt;} preBalances The balances of the transaction accounts before processing
  * @property {Array&lt;number&gt;} postBalances The balances of the transaction accounts after processing
+ * @property {Array&lt;string&gt;} logMessages An array of program log messages emitted during a transaction
  * @property {object|null} err The error result of transaction processing
  */
 type ConfirmedTransactionMeta = {
   fee: number,
   preBalances: Array&lt;number&gt;,
   postBalances: Array&lt;number&gt;,
+  logMessages?: Array&lt;string&gt;,
   err: TransactionError | null,
 };
 
@@ -660,11 +671,14 @@ type ConfirmedBlock = {
   }&gt;,
 };
 
-function createRpcRequest(url): RpcRequest {
+function createRpcRequest(url: string, useHttps: boolean): RpcRequest {
+  const agentManager = new AgentManager(useHttps);
   const server = jayson(async (request, callback) =&gt; {
+    const agent = agentManager.requestStart();
     const options = {
       method: &apos;POST&apos;,
       body: request,
+      agent,
       headers: {
         &apos;Content-Type&apos;: &apos;application/json&apos;,
       },
@@ -698,6 +712,8 @@ function createRpcRequest(url): RpcRequest {
       }
     } catch (err) {
       callback(err);
+    } finally {
+      agentManager.requestEnd();
     }
   });
 
@@ -970,6 +986,20 @@ const ParsedAccountInfoResult = struct.object({
 });
 
 /**
+ * @private
+ */
+const StakeActivationResult = struct.object({
+  state: struct.union([
+    struct.literal(&apos;active&apos;),
+    struct.literal(&apos;inactive&apos;),
+    struct.literal(&apos;activating&apos;),
+    struct.literal(&apos;deactivating&apos;),
+  ]),
+  active: &apos;number&apos;,
+  inactive: &apos;number&apos;,
+});
+
+/**
  * Expected JSON RPC response for the &quot;getAccountInfo&quot; message
  */
 const GetAccountInfoAndContextRpcResult = jsonRpcResultAndContext(
@@ -982,6 +1012,11 @@ const GetAccountInfoAndContextRpcResult = jsonRpcResultAndContext(
 const GetParsedAccountInfoResult = jsonRpcResultAndContext(
   struct.union([&apos;null&apos;, ParsedAccountInfoResult]),
 );
+
+/**
+ * Expected JSON RPC response for the &quot;getStakeActivation&quot; message with jsonParsed param
+ */
+const GetStakeActivationResult = jsonRpcResult(StakeActivationResult);
 
 /**
  * Expected JSON RPC response for the &quot;getConfirmedSignaturesForAddress&quot; message
@@ -1240,6 +1275,7 @@ const ConfirmedTransactionMetaResult = struct.union([
     fee: &apos;number&apos;,
     preBalances: struct.array([&apos;number&apos;]),
     postBalances: struct.array([&apos;number&apos;]),
+    logMessages: struct.union([struct.array([&apos;string&apos;]), &apos;undefined&apos;]),
   }),
 ]);
 
@@ -1362,6 +1398,20 @@ type ParsedAccountData = {
   program: string,
   parsed: any,
   space: number,
+};
+
+/**
+ * Stake Activation data
+ *
+ * @typedef {Object} StakeActivationData
+ * @property {string} state: &lt;string - the stake account&apos;s activation state, one of: active, inactive, activating, deactivating
+ * @property {number} active: stake active during the epoch
+ * @property {number} inactive: stake inactive during the epoch
+ */
+type StakeActivationData = {
+  state: &apos;active&apos; | &apos;inactive&apos; | &apos;activating&apos; | &apos;deactivating&apos;,
+  active: number,
+  inactive: number,
 };
 
 /**
@@ -1569,8 +1619,9 @@ export class Connection {
    */
   constructor(endpoint: string, commitment: ?Commitment) {
     let url = urlParse(endpoint);
+    const useHttps = url.protocol === &apos;https:&apos;;
 
-    this._rpcRequest = createRpcRequest(url.href);
+    this._rpcRequest = createRpcRequest(url.href, useHttps);
     this._commitment = commitment;
     this._blockhashInfo = {
       recentBlockhash: null,
@@ -1579,8 +1630,14 @@ export class Connection {
       simulatedSignatures: [],
     };
 
-    url.protocol = url.protocol === &apos;https:&apos; ? &apos;wss:&apos; : &apos;ws:&apos;;
+    url.protocol = useHttps ? &apos;wss:&apos; : &apos;ws:&apos;;
     url.host = &apos;&apos;;
+    // Only shift the port by +1 as a convention for ws(s) only if given endpoint
+    // is explictly specifying the endpoint port (HTTP-based RPC), assuming
+    // we&apos;re directly trying to connect to solana-validator&apos;s ws listening port.
+    // When the endpoint omits the port, we&apos;re connecting to the protocol
+    // default ports: http(80) or https(443) and it&apos;s assumed we&apos;re behind a reverse
+    // proxy which manages WebSocket upgrade and backend port redirection.
     if (url.port !== null) {
       url.port = String(Number(url.port) + 1);
     }
@@ -2018,6 +2075,36 @@ export class Connection {
           &apos;failed to get info about account &apos; + publicKey.toBase58() + &apos;: &apos; + e,
         );
       });
+  }
+
+  /**
+   * Returns epoch activation information for a stake account that has been delegated
+   */
+  async getStakeActivation(
+    publicKey: PublicKey,
+    commitment: ?Commitment,
+    epoch: ?number,
+  ): Promise&lt;StakeActivationData&gt; {
+    const args = this._buildArgs(
+      [publicKey.toBase58()],
+      commitment,
+      undefined,
+      epoch !== undefined ? {epoch} : undefined,
+    );
+
+    const unsafeRes = await this._rpcRequest(&apos;getStakeActivation&apos;, args);
+    const res = GetStakeActivationResult(unsafeRes);
+    if (res.error) {
+      throw new Error(
+        `failed to get Stake Activation ${publicKey.toBase58()}: ${
+          res.error.message
+        }`,
+      );
+    }
+    assert(typeof res.result !== &apos;undefined&apos;);
+
+    const {state, active, inactive} = res.result;
+    return {state, active, inactive};
   }
 
   /**
@@ -2855,7 +2942,20 @@ export class Connection {
   ): Promise&lt;TransactionSignature&gt; {
     const args = [encodedTransaction];
     const skipPreflight = options &amp;&amp; options.skipPreflight;
-    if (skipPreflight) args.push({skipPreflight});
+    const preflightCommitment = options &amp;&amp; options.preflightCommitment;
+
+    if (skipPreflight &amp;&amp; preflightCommitment) {
+      throw new Error(
+        &apos;cannot set preflightCommitment when skipPreflight is enabled&apos;,
+      );
+    }
+
+    if (skipPreflight) {
+      args.push({skipPreflight});
+    } else if (preflightCommitment) {
+      args.push({preflightCommitment});
+    }
+
     const unsafeRes = await this._rpcRequest(&apos;sendTransaction&apos;, args);
     const res = SendTransactionRpcResult(unsafeRes);
     if (res.error) {
@@ -3256,15 +3356,19 @@ export class Connection {
     args: Array&lt;any&gt;,
     override: ?Commitment,
     encoding?: &apos;jsonParsed&apos; | &apos;base64&apos;,
+    extra?: any,
   ): Array&lt;any&gt; {
     const commitment = override || this._commitment;
-    if (commitment || encoding) {
+    if (commitment || encoding || extra) {
       let options: any = {};
       if (encoding) {
         options.encoding = encoding;
       }
       if (commitment) {
         options.commitment = commitment;
+      }
+      if (extra) {
+        options = Object.assign(options, extra);
       }
       args.push(options);
     }

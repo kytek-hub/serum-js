@@ -62,11 +62,13 @@ declare module '@solana/web3.js' {
 
   declare export type SendOptions = {
     skipPreflight: ?boolean,
+    preflightCommitment: ?Commitment,
   };
 
   declare export type ConfirmOptions = {
     commitment: ?Commitment,
     skipPreflight: ?boolean,
+    preflightCommitment: ?Commitment,
   };
 
   declare export type ConfirmedSignaturesForAddress2Options = {
@@ -153,6 +155,7 @@ declare module '@solana/web3.js' {
     fee: number,
     preBalances: Array<number>,
     postBalances: Array<number>,
+    logMessages?: Array<string>,
     err: TransactionError | null,
   };
 
@@ -176,6 +179,12 @@ declare module '@solana/web3.js' {
     program: string,
     parsed: any,
     space: number,
+  };
+
+  declare export type StakeActivationData = {
+    state: 'active' | 'inactive' | 'activating' | 'deactivating',
+    active: number,
+    inactive: number,
   };
 
   declare export type ParsedMessageAccount = {
@@ -218,6 +227,7 @@ declare module '@solana/web3.js' {
 
   declare export type Version = {
     'solana-core': string,
+    'feature-set': ?number,
   };
 
   declare export type VoteAccountInfo = {
@@ -328,6 +338,11 @@ declare module '@solana/web3.js' {
     ): Promise<
       RpcResponseAndContext<AccountInfo<Buffer | ParsedAccountData> | null>,
     >;
+    getStakeActivation(
+      publicKey: PublicKey,
+      commitment?: Commitment,
+      epoch?: number,
+    ): Promise<StakeActivationData>;
     getProgramAccounts(
       programId: PublicKey,
       commitment: ?Commitment,
@@ -958,7 +973,7 @@ declare module '@solana/web3.js' {
       program: Account,
       programId: PublicKey,
       data: Buffer | Uint8Array | Array<number>,
-    ): Promise<PublicKey>;
+    ): Promise<boolean>;
   }
 
   // === src/bpf-loader.js ===
@@ -971,7 +986,7 @@ declare module '@solana/web3.js' {
       program: Account,
       elfBytes: Buffer | Uint8Array | Array<number>,
       loaderProgramId: PublicKey,
-    ): Promise<PublicKey>;
+    ): Promise<boolean>;
   }
 
   // === src/bpf-loader-deprecated.js ===

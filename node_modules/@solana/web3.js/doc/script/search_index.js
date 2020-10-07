@@ -6,6 +6,12 @@ window.esdocSearchIndex = [
     "class"
   ],
   [
+    "@solana/web3~agentmanager",
+    "class/src/agent-manager.js~AgentManager.html",
+    "<span>AgentManager</span> <span class=\"search-result-import-path\">@solana/web3</span>",
+    "class"
+  ],
+  [
     "@solana/web3~authorized",
     "class/src/stake-program.js~Authorized.html",
     "<span>Authorized</span> <span class=\"search-result-import-path\">@solana/web3</span>",
@@ -40,6 +46,12 @@ window.esdocSearchIndex = [
     "class/src/connection.js~Connection.html",
     "<span>Connection</span> <span class=\"search-result-import-path\">@solana/web3</span>",
     "class"
+  ],
+  [
+    "@solana/web3~destroy_timeout_ms",
+    "variable/index.html#static-variable-DESTROY_TIMEOUT_MS",
+    "<span>DESTROY_TIMEOUT_MS</span> <span class=\"search-result-import-path\">@solana/web3</span>",
+    "variable"
   ],
   [
     "@solana/web3~getconfirmedblockrpcresult",
@@ -612,6 +624,30 @@ window.esdocSearchIndex = [
     "member"
   ],
   [
+    "src/agent-manager.js",
+    "file/src/agent-manager.js.html",
+    "src/agent-manager.js",
+    "file"
+  ],
+  [
+    "src/agent-manager.js~agentmanager#constructor",
+    "class/src/agent-manager.js~AgentManager.html#instance-constructor-constructor",
+    "src/agent-manager.js~AgentManager#constructor",
+    "method"
+  ],
+  [
+    "src/agent-manager.js~agentmanager#requestend",
+    "class/src/agent-manager.js~AgentManager.html#instance-method-requestEnd",
+    "src/agent-manager.js~AgentManager#requestEnd",
+    "method"
+  ],
+  [
+    "src/agent-manager.js~agentmanager#requeststart",
+    "class/src/agent-manager.js~AgentManager.html#instance-method-requestStart",
+    "src/agent-manager.js~AgentManager#requestStart",
+    "method"
+  ],
+  [
     "src/blockhash.js",
     "file/src/blockhash.js.html",
     "src/blockhash.js",
@@ -918,6 +954,12 @@ window.esdocSearchIndex = [
     "method"
   ],
   [
+    "src/connection.js~connection#getstakeactivation",
+    "class/src/connection.js~Connection.html#instance-method-getStakeActivation",
+    "src/connection.js~Connection#getStakeActivation",
+    "method"
+  ],
+  [
     "src/connection.js~connection#getsupply",
     "class/src/connection.js~Connection.html#instance-method-getSupply",
     "src/connection.js~Connection#getSupply",
@@ -1191,6 +1233,12 @@ window.esdocSearchIndex = [
     "src/connection.js~slotinfo",
     "typedef/index.html#static-typedef-SlotInfo",
     "src/connection.js~SlotInfo",
+    "typedef"
+  ],
+  [
+    "src/connection.js~stakeactivationdata",
+    "typedef/index.html#static-typedef-StakeActivationData",
+    "src/connection.js~StakeActivationData",
     "typedef"
   ],
   [

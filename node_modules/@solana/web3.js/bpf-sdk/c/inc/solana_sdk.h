@@ -49,26 +49,26 @@ static_assert(sizeof(uint64_t) == 8);
 /**
  * Minimum of signed integral types
  */
-# define INT8_MIN   (-128)
-# define INT16_MIN  (-32767-1)
-# define INT32_MIN  (-2147483647-1)
-# define INT64_MIN  (-__INT64_C(9223372036854775807)-1)
+#define INT8_MIN   (-128)
+#define INT16_MIN  (-32767-1)
+#define INT32_MIN  (-2147483647-1)
+#define INT64_MIN  (-9223372036854775807L-1)
 
 /**
  * Maximum of signed integral types
  */
-# define INT8_MAX   (127)
-# define INT16_MAX  (32767)
-# define INT32_MAX  (2147483647)
-# define INT64_MAX  (__INT64_C(9223372036854775807))
+#define INT8_MAX   (127)
+#define INT16_MAX  (32767)
+#define INT32_MAX  (2147483647)
+#define INT64_MAX  (9223372036854775807L)
 
 /**
  * Maximum of unsigned integral types
  */
-# define UINT8_MAX   (255)
-# define UINT16_MAX  (65535)
-# define UINT32_MAX  (4294967295U)
-# define UINT64_MAX  (__UINT64_C(18446744073709551615))
+#define UINT8_MAX   (255)
+#define UINT16_MAX  (65535)
+#define UINT32_MAX  (4294967295U)
+#define UINT64_MAX  (18446744073709551615UL)
 
 /**
  * NULL
@@ -227,6 +227,26 @@ static size_t sol_strlen(const char *s) {
  */
 #define SOL_ARRAY_SIZE(a) (sizeof(a) / sizeof(a[0]))
 
+
+/**
+ * Internal memory alloc/free function
+ */
+void *sol_alloc_free_(uint64_t size, void *ptr);
+
+/**
+ * Alloc zero-initialized memory
+ */
+static void *sol_calloc(size_t nitems, size_t size) {
+  return sol_alloc_free_(nitems * size, 0);
+}
+
+/**
+ * Deallocates the memory previously allocated by sol_calloc
+ */
+static void sol_free(void *ptr) {
+  (void) sol_alloc_free_(0, ptr);
+}
+
 /**
  * Panics
  *
@@ -372,6 +392,32 @@ static bool sol_deserialize(
 }
 
 /**
+ * Byte array pointer and string
+ */
+typedef struct {
+  const uint8_t *addr; /** bytes */
+  uint64_t len; /** number of bytes*/
+} SolBytes;
+
+/**
+ * Length of a sha256 hash result
+ */
+#define SHA256_RESULT_LENGTH 32
+
+/**
+ * Sha256
+ *
+ * @param bytes Array of byte arrays
+ * @param bytes_len Number of byte arrays
+ * @param result 32 byte array to hold the result
+ */
+static uint64_t sol_sha256(
+    const SolBytes *bytes,
+    int bytes_len,
+    const uint8_t *result
+);
+
+/**
  * Account Meta
  */
 typedef struct {
@@ -392,25 +438,26 @@ typedef struct {
 } SolInstruction;
 
 /**
- * Seed used to create a program address
+ * Seed used to create a program address or passed to sol_invoke_signed
  */
 typedef struct {
-  const uint8_t *addr; /** Seed string */
-  uint64_t len; /** Length of the seed string */
+  const uint8_t *addr; /** Seed bytes */
+  uint64_t len; /** Length of the seed bytes */
 } SolSignerSeed;
 
 /**
- * Seeds used by a signer to create a program address
+ * Seeds used by a signer to create a program address or passed to
+ * sol_invoke_signed
  */
 typedef struct {
   const SolSignerSeed *addr; /** An arry of a signer's seeds */
   uint64_t len; /** Number of seeds */
 } SolSignerSeeds;
 
-/*
+/**
  * Create a program address
  *
- * @param seeds Seed strings used to sign program accounts
+ * @param seeds Seed bytes used to sign program accounts
  * @param seeds_len Length of the seeds array
  * @param Progam id of the signer
  * @param Program address created, filled on return
@@ -427,13 +474,13 @@ static uint64_t sol_create_program_address(
  *  * @{
  */
 
-/*
+/**
  * Invoke another program and sign for some of the keys
  *
  * @param instruction Instruction to process
  * @param account_infos Accounts used by instruction
  * @param account_infos_len Length of account_infos array
- * @param seeds Seed strings used to sign program accounts
+ * @param seeds Seed bytes used to sign program accounts
  * @param seeds_len Length of the seeds array
  */
 static uint64_t sol_invoke_signed(
@@ -459,7 +506,7 @@ static uint64_t sol_invoke_signed(
     signers_seeds_len
   );
 }
-/*
+/**
  * Invoke another program
  *
  * @param instruction Instruction to process

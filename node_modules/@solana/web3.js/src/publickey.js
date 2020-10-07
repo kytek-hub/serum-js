@@ -3,7 +3,7 @@
 import BN from 'bn.js';
 import bs58 from 'bs58';
 import nacl from 'tweetnacl';
-const bitcoin = require('bitcoinjs-lib')
+import {sha256} from 'crypto-hash';
 
 //$FlowFixMe
 let naclLowLevel = nacl.lowlevel;
@@ -84,7 +84,7 @@ export class PublicKey {
       Buffer.from(seed),
       programId.toBuffer(),
     ]);
-    const hash = await bitcoin.crypto.sha256(new Uint8Array(buffer));
+    const hash = await sha256(new Uint8Array(buffer));
     return new PublicKey(Buffer.from(hash, 'hex'));
   }
 
@@ -104,7 +104,7 @@ export class PublicKey {
       programId.toBuffer(),
       Buffer.from('ProgramDerivedAddress'),
     ]);
-    let hash = await bitcoin.crypto.sha256(new Uint8Array(buffer));
+    let hash = await sha256(new Uint8Array(buffer));
     let publicKeyBytes = new BN(hash, 16).toArray(null, 32);
     if (is_on_curve(publicKeyBytes)) {
       throw new Error(`Invalid seeds, address must fall off the curve`);

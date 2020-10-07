@@ -20,6 +20,7 @@ import type {Blockhash} from './blockhash';
 import type {FeeCalculator} from './fee-calculator';
 import type {Account} from './account';
 import type {TransactionSignature} from './transaction';
+import {AgentManager} from './agent-manager';
 
 export const BLOCKHASH_CACHE_TIMEOUT_MS = 30 * 1000;
 
@@ -48,9 +49,11 @@ type Context = {
  *
  * @typedef {Object} SendOptions
  * @property {boolean | undefined} skipPreflight disable transaction verification step
+ * @property {Commitment | undefined} preflightCommitment preflight commitment level
  */
 export type SendOptions = {
   skipPreflight?: boolean,
+  preflightCommitment?: Commitment,
 };
 
 /**
@@ -59,10 +62,12 @@ export type SendOptions = {
  * @typedef {Object} ConfirmOptions
  * @property {boolean | undefined} skipPreflight disable transaction verification step
  * @property {Commitment | undefined} commitment desired commitment level
+ * @property {Commitment | undefined} preflightCommitment preflight commitment level
  */
 export type ConfirmOptions = {
   skipPreflight?: boolean,
   commitment?: Commitment,
+  preflightCommitment?: Commitment,
 };
 
 /**
@@ -345,8 +350,9 @@ const SignatureStatusResult = struct({err: TransactionErrorResult});
  * @typedef {Object} Version
  * @property {string} solana-core Version of solana-core
  */
-const Version = struct({
+const Version = struct.pick({
   'solana-core': 'string',
+  'feature-set': 'number?',
 });
 
 type SimulatedTransactionResponse = {
@@ -368,12 +374,14 @@ const SimulatedTransactionResponseValidator = jsonRpcResultAndContext(
  * @property {number} fee The fee charged for processing the transaction
  * @property {Array<number>} preBalances The balances of the transaction accounts before processing
  * @property {Array<number>} postBalances The balances of the transaction accounts after processing
+ * @property {Array<string>} logMessages An array of program log messages emitted during a transaction
  * @property {object|null} err The error result of transaction processing
  */
 type ConfirmedTransactionMeta = {
   fee: number,
   preBalances: Array<number>,
   postBalances: Array<number>,
+  logMessages?: Array<string>,
   err: TransactionError | null,
 };
 
@@ -497,11 +505,14 @@ type ConfirmedBlock = {
   }>,
 };
 
-function createRpcRequest(url): RpcRequest {
+function createRpcRequest(url: string, useHttps: boolean): RpcRequest {
+  const agentManager = new AgentManager(useHttps);
   const server = jayson(async (request, callback) => {
+    const agent = agentManager.requestStart();
     const options = {
       method: 'POST',
       body: request,
+      agent,
       headers: {
         'Content-Type': 'application/json',
       },
@@ -535,6 +546,8 @@ function createRpcRequest(url): RpcRequest {
       }
     } catch (err) {
       callback(err);
+    } finally {
+      agentManager.requestEnd();
     }
   });
 
@@ -807,6 +820,20 @@ const ParsedAccountInfoResult = struct.object({
 });
 
 /**
+ * @private
+ */
+const StakeActivationResult = struct.object({
+  state: struct.union([
+    struct.literal('active'),
+    struct.literal('inactive'),
+    struct.literal('activating'),
+    struct.literal('deactivating'),
+  ]),
+  active: 'number',
+  inactive: 'number',
+});
+
+/**
  * Expected JSON RPC response for the "getAccountInfo" message
  */
 const GetAccountInfoAndContextRpcResult = jsonRpcResultAndContext(
@@ -819,6 +846,11 @@ const GetAccountInfoAndContextRpcResult = jsonRpcResultAndContext(
 const GetParsedAccountInfoResult = jsonRpcResultAndContext(
   struct.union(['null', ParsedAccountInfoResult]),
 );
+
+/**
+ * Expected JSON RPC response for the "getStakeActivation" message with jsonParsed param
+ */
+const GetStakeActivationResult = jsonRpcResult(StakeActivationResult);
 
 /**
  * Expected JSON RPC response for the "getConfirmedSignaturesForAddress" message
@@ -1077,6 +1109,7 @@ const ConfirmedTransactionMetaResult = struct.union([
     fee: 'number',
     preBalances: struct.array(['number']),
     postBalances: struct.array(['number']),
+    logMessages: struct.union([struct.array(['string']), 'undefined']),
   }),
 ]);
 
@@ -1199,6 +1232,20 @@ type ParsedAccountData = {
   program: string,
   parsed: any,
   space: number,
+};
+
+/**
+ * Stake Activation data
+ *
+ * @typedef {Object} StakeActivationData
+ * @property {string} state: <string - the stake account's activation state, one of: active, inactive, activating, deactivating
+ * @property {number} active: stake active during the epoch
+ * @property {number} inactive: stake inactive during the epoch
+ */
+type StakeActivationData = {
+  state: 'active' | 'inactive' | 'activating' | 'deactivating',
+  active: number,
+  inactive: number,
 };
 
 /**
@@ -1406,8 +1453,9 @@ export class Connection {
    */
   constructor(endpoint: string, commitment: ?Commitment) {
     let url = urlParse(endpoint);
+    const useHttps = url.protocol === 'https:';
 
-    this._rpcRequest = createRpcRequest(url.href);
+    this._rpcRequest = createRpcRequest(url.href, useHttps);
     this._commitment = commitment;
     this._blockhashInfo = {
       recentBlockhash: null,
@@ -1416,8 +1464,14 @@ export class Connection {
       simulatedSignatures: [],
     };
 
-    url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+    url.protocol = useHttps ? 'wss:' : 'ws:';
     url.host = '';
+    // Only shift the port by +1 as a convention for ws(s) only if given endpoint
+    // is explictly specifying the endpoint port (HTTP-based RPC), assuming
+    // we're directly trying to connect to solana-validator's ws listening port.
+    // When the endpoint omits the port, we're connecting to the protocol
+    // default ports: http(80) or https(443) and it's assumed we're behind a reverse
+    // proxy which manages WebSocket upgrade and backend port redirection.
     if (url.port !== null) {
       url.port = String(Number(url.port) + 1);
     }
@@ -1855,6 +1909,36 @@ export class Connection {
           'failed to get info about account ' + publicKey.toBase58() + ': ' + e,
         );
       });
+  }
+
+  /**
+   * Returns epoch activation information for a stake account that has been delegated
+   */
+  async getStakeActivation(
+    publicKey: PublicKey,
+    commitment: ?Commitment,
+    epoch: ?number,
+  ): Promise<StakeActivationData> {
+    const args = this._buildArgs(
+      [publicKey.toBase58()],
+      commitment,
+      undefined,
+      epoch !== undefined ? {epoch} : undefined,
+    );
+
+    const unsafeRes = await this._rpcRequest('getStakeActivation', args);
+    const res = GetStakeActivationResult(unsafeRes);
+    if (res.error) {
+      throw new Error(
+        `failed to get Stake Activation ${publicKey.toBase58()}: ${
+          res.error.message
+        }`,
+      );
+    }
+    assert(typeof res.result !== 'undefined');
+
+    const {state, active, inactive} = res.result;
+    return {state, active, inactive};
   }
 
   /**
@@ -2692,7 +2776,20 @@ export class Connection {
   ): Promise<TransactionSignature> {
     const args = [encodedTransaction];
     const skipPreflight = options && options.skipPreflight;
-    if (skipPreflight) args.push({skipPreflight});
+    const preflightCommitment = options && options.preflightCommitment;
+
+    if (skipPreflight && preflightCommitment) {
+      throw new Error(
+        'cannot set preflightCommitment when skipPreflight is enabled',
+      );
+    }
+
+    if (skipPreflight) {
+      args.push({skipPreflight});
+    } else if (preflightCommitment) {
+      args.push({preflightCommitment});
+    }
+
     const unsafeRes = await this._rpcRequest('sendTransaction', args);
     const res = SendTransactionRpcResult(unsafeRes);
     if (res.error) {
@@ -3093,15 +3190,19 @@ export class Connection {
     args: Array<any>,
     override: ?Commitment,
     encoding?: 'jsonParsed' | 'base64',
+    extra?: any,
   ): Array<any> {
     const commitment = override || this._commitment;
-    if (commitment || encoding) {
+    if (commitment || encoding || extra) {
       let options: any = {};
       if (encoding) {
         options.encoding = encoding;
       }
       if (commitment) {
         options.commitment = commitment;
+      }
+      if (extra) {
+        options = Object.assign(options, extra);
       }
       args.push(options);
     }

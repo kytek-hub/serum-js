@@ -20,6 +20,8 @@ var fetch = require('node-fetch');
 var jayson = require('jayson/lib/client/browser');
 var superstruct = require('superstruct');
 var rpcWebsockets = require('rpc-websockets');
+var http = require('http');
+var https = require('https');
 
 function _interopDefaultLegacy (e) { return e && typeof e === 'object' && 'default' in e ? e : { 'default': e }; }
 
@@ -36,6 +38,8 @@ var _slicedToArray__default = /*#__PURE__*/_interopDefaultLegacy(_slicedToArray)
 var assert__default = /*#__PURE__*/_interopDefaultLegacy(assert);
 var fetch__default = /*#__PURE__*/_interopDefaultLegacy(fetch);
 var jayson__default = /*#__PURE__*/_interopDefaultLegacy(jayson);
+var http__default = /*#__PURE__*/_interopDefaultLegacy(http);
+var https__default = /*#__PURE__*/_interopDefaultLegacy(https);
 
 var toBuffer = function toBuffer(arr) {
   if (arr instanceof Buffer) {
@@ -1370,6 +1374,71 @@ function promiseTimeout(promise, timeoutMs) {
   });
 }
 
+var DESTROY_TIMEOUT_MS = 5000;
+var AgentManager = /*#__PURE__*/function () {
+  _createClass__default['default'](AgentManager, null, [{
+    key: "_newAgent",
+    value: function _newAgent(useHttps) {
+      var options = {
+        keepAlive: true,
+        maxSockets: 25
+      };
+
+      if (useHttps) {
+        return new https__default['default'].Agent(options);
+      } else {
+        return new http__default['default'].Agent(options);
+      }
+    }
+  }]);
+
+  function AgentManager(useHttps) {
+    _classCallCheck__default['default'](this, AgentManager);
+
+    _defineProperty__default['default'](this, "_agent", void 0);
+
+    _defineProperty__default['default'](this, "_activeRequests", 0);
+
+    _defineProperty__default['default'](this, "_destroyTimeout", null);
+
+    _defineProperty__default['default'](this, "_useHttps", void 0);
+
+    this._useHttps = useHttps === true;
+    this._agent = AgentManager._newAgent(this._useHttps);
+  }
+
+  _createClass__default['default'](AgentManager, [{
+    key: "requestStart",
+    value: function requestStart() {
+      // $FlowExpectedError - Don't manage agents in the browser
+      if (process.browser) return;
+      this._activeRequests++;
+      clearTimeout(this._destroyTimeout);
+      this._destroyTimeout = null;
+      return this._agent;
+    }
+  }, {
+    key: "requestEnd",
+    value: function requestEnd() {
+      var _this = this;
+
+      // $FlowExpectedError - Don't manage agents in the browser
+      if (process.browser) return;
+      this._activeRequests--;
+
+      if (this._activeRequests === 0 && this._destroyTimeout === null) {
+        this._destroyTimeout = setTimeout(function () {
+          _this._agent.destroy();
+
+          _this._agent = AgentManager._newAgent(_this._useHttps);
+        }, DESTROY_TIMEOUT_MS);
+      }
+    }
+  }]);
+
+  return AgentManager;
+}();
+
 function _createForOfIteratorHelper$1(o, allowArrayLike) { var it; if (typeof Symbol === "undefined" || o[Symbol.iterator] == null) { if (Array.isArray(o) || (it = _unsupportedIterableToArray$1(o)) || allowArrayLike && o && typeof o.length === "number") { if (it) o = it; var i = 0; var F = function F() {}; return { s: F, n: function n() { if (i >= o.length) return { done: true }; return { done: false, value: o[i++] }; }, e: function e(_e) { throw _e; }, f: F }; } throw new TypeError("Invalid attempt to iterate non-iterable instance.\nIn order to be iterable, non-array objects must have a [Symbol.iterator]() method."); } var normalCompletion = true, didErr = false, err; return { s: function s() { it = o[Symbol.iterator](); }, n: function n() { var step = it.next(); normalCompletion = step.done; return step; }, e: function e(_e2) { didErr = true; err = _e2; }, f: function f() { try { if (!normalCompletion && it["return"] != null) it["return"](); } finally { if (didErr) throw err; } } }; }
 
 function _unsupportedIterableToArray$1(o, minLen) { if (!o) return; if (typeof o === "string") return _arrayLikeToArray$1(o, minLen); var n = Object.prototype.toString.call(o).slice(8, -1); if (n === "Object" && o.constructor) n = o.constructor.name; if (n === "Map" || n === "Set") return Array.from(o); if (n === "Arguments" || /^(?:Ui|I)nt(?:8|16|32)(?:Clamped)?Array$/.test(n)) return _arrayLikeToArray$1(o, minLen); }
@@ -1509,8 +1578,9 @@ var SignatureStatusResult = superstruct.struct({
  * @property {string} solana-core Version of solana-core
  */
 
-var Version = superstruct.struct({
-  'solana-core': 'string'
+var Version = superstruct.struct.pick({
+  'solana-core': 'string',
+  'feature-set': 'number?'
 });
 var SimulatedTransactionResponseValidator = jsonRpcResultAndContext(superstruct.struct.pick({
   err: superstruct.struct.union(['null', 'object', 'string']),
@@ -1523,72 +1593,76 @@ var SimulatedTransactionResponseValidator = jsonRpcResultAndContext(superstruct.
  * @property {number} fee The fee charged for processing the transaction
  * @property {Array<number>} preBalances The balances of the transaction accounts before processing
  * @property {Array<number>} postBalances The balances of the transaction accounts after processing
+ * @property {Array<string>} logMessages An array of program log messages emitted during a transaction
  * @property {object|null} err The error result of transaction processing
  */
 
-function createRpcRequest(url) {
+function createRpcRequest(url, useHttps) {
+  var agentManager = new AgentManager(useHttps);
   var server = jayson__default['default']( /*#__PURE__*/function () {
     var _ref = _asyncToGenerator__default['default']( /*#__PURE__*/_regeneratorRuntime__default['default'].mark(function _callee(request, callback) {
-      var options, too_many_requests_retries, res, waitTime, text;
+      var agent, options, too_many_requests_retries, res, waitTime, text;
       return _regeneratorRuntime__default['default'].wrap(function _callee$(_context) {
         while (1) {
           switch (_context.prev = _context.next) {
             case 0:
+              agent = agentManager.requestStart();
               options = {
                 method: 'POST',
                 body: request,
+                agent: agent,
                 headers: {
                   'Content-Type': 'application/json'
                 }
               };
-              _context.prev = 1;
+              _context.prev = 2;
               too_many_requests_retries = 5;
               res = {};
               waitTime = 500;
 
-            case 5:
-              _context.next = 7;
+            case 6:
+              _context.next = 8;
               return fetch__default['default'](url, options);
 
-            case 7:
+            case 8:
               res = _context.sent;
 
               if (!(res.status !== 429
               /* Too many requests */
               )) {
-                _context.next = 10;
+                _context.next = 11;
                 break;
               }
 
-              return _context.abrupt("break", 19);
+              return _context.abrupt("break", 20);
 
-            case 10:
+            case 11:
               too_many_requests_retries -= 1;
 
               if (!(too_many_requests_retries === 0)) {
-                _context.next = 13;
+                _context.next = 14;
                 break;
               }
 
-              return _context.abrupt("break", 19);
+              return _context.abrupt("break", 20);
 
-            case 13:
+            case 14:
               console.log("Server responded with ".concat(res.status, " ").concat(res.statusText, ".  Retrying after ").concat(waitTime, "ms delay..."));
-              _context.next = 16;
+              _context.next = 17;
               return sleep(waitTime);
 
-            case 16:
+            case 17:
               waitTime *= 2;
 
-            case 17:
-              _context.next = 5;
+            case 18:
+              _context.next = 6;
               break;
 
-            case 19:
-              _context.next = 21;
+            case 20:
+              _context.next = 22;
               return res.text();
 
-            case 21:
+            case 22:
               text = _context.sent;
 
               if (res.ok) {
@@ -1597,20 +1671,25 @@ function createRpcRequest(url) {
                 callback(new Error("".concat(res.status, " ").concat(res.statusText, ": ").concat(text)));
               }
 
-              _context.next = 28;
+              _context.next = 29;
               break;
 
-            case 25:
-              _context.prev = 25;
-              _context.t0 = _context["catch"](1);
+            case 26:
+              _context.prev = 26;
+              _context.t0 = _context["catch"](2);
               callback(_context.t0);
 
-            case 28:
+            case 29:
+              _context.prev = 29;
+              agentManager.requestEnd();
+              return _context.finish(29);
+
+            case 32:
             case "end":
               return _context.stop();
           }
         }
-      }, _callee, null, [[1, 25]]);
+      }, _callee, null, [[2, 26, 29, 32]]);
     }));
 
     return function (_x, _x2) {
@@ -1841,6 +1920,15 @@ var ParsedAccountInfoResult = superstruct.struct.object({
   rentEpoch: 'number?'
 });
 /**
+ * @private
+ */
+
+var StakeActivationResult = superstruct.struct.object({
+  state: superstruct.struct.union([superstruct.struct.literal('active'), superstruct.struct.literal('inactive'), superstruct.struct.literal('activating'), superstruct.struct.literal('deactivating')]),
+  active: 'number',
+  inactive: 'number'
+});
+/**
  * Expected JSON RPC response for the "getAccountInfo" message
  */
 
@@ -1850,6 +1938,11 @@ var GetAccountInfoAndContextRpcResult = jsonRpcResultAndContext(superstruct.stru
  */
 
 var GetParsedAccountInfoResult = jsonRpcResultAndContext(superstruct.struct.union(['null', ParsedAccountInfoResult]));
+/**
+ * Expected JSON RPC response for the "getStakeActivation" message with jsonParsed param
+ */
+
+var GetStakeActivationResult = jsonRpcResult(StakeActivationResult);
 /**
  * Expected JSON RPC response for the "getConfirmedSignaturesForAddress" message
  */
@@ -2064,7 +2157,8 @@ var ConfirmedTransactionMetaResult = superstruct.struct.union(['null', superstru
   err: TransactionErrorResult,
   fee: 'number',
   preBalances: superstruct.struct.array(['number']),
-  postBalances: superstruct.struct.array(['number'])
+  postBalances: superstruct.struct.array(['number']),
+  logMessages: superstruct.struct.union([superstruct.struct.array(['string']), 'undefined'])
 })]);
 /**
  * Expected JSON RPC response for the "getConfirmedBlock" message
@@ -2191,7 +2285,8 @@ var Connection = /*#__PURE__*/function () {
     _defineProperty__default['default'](this, "_rootSubscriptionCounter", 0);
 
     var url$1 = url.parse(endpoint);
-    this._rpcRequest = createRpcRequest(url$1.href);
+    var useHttps = url$1.protocol === 'https:';
+    this._rpcRequest = createRpcRequest(url$1.href, useHttps);
     this._commitment = commitment;
     this._blockhashInfo = {
       recentBlockhash: null,
@@ -2199,8 +2294,13 @@ var Connection = /*#__PURE__*/function () {
       transactionSignatures: [],
       simulatedSignatures: []
     };
-    url$1.protocol = url$1.protocol === 'https:' ? 'wss:' : 'ws:';
-    url$1.host = '';
+    url$1.protocol = useHttps ? 'wss:' : 'ws:';
+    url$1.host = ''; // Only shift the port by +1 as a convention for ws(s) only if given endpoint
+    // is explictly specifying the endpoint port (HTTP-based RPC), assuming
+    // we're directly trying to connect to solana-validator's ws listening port.
+    // When the endpoint omits the port, we're connecting to the protocol
+    // default ports: http(80) or https(443) and it's assumed we're behind a reverse
+    // proxy which manages WebSocket upgrade and backend port redirection.
 
     if (url$1.port !== null) {
       url$1.port = String(Number(url$1.port) + 1);
@@ -3026,6 +3126,60 @@ var Connection = /*#__PURE__*/function () {
       return getAccountInfo;
     }()
     /**
+     * Returns epoch activation information for a stake account that has been delegated
+     */
+
+  }, {
+    key: "getStakeActivation",
+    value: function () {
+      var _getStakeActivation = _asyncToGenerator__default['default']( /*#__PURE__*/_regeneratorRuntime__default['default'].mark(function _callee17(publicKey, commitment, epoch) {
+        var args, unsafeRes, res, _res$result, state, active, inactive;
+
+        return _regeneratorRuntime__default['default'].wrap(function _callee17$(_context17) {
+          while (1) {
+            switch (_context17.prev = _context17.next) {
+              case 0:
+                args = this._buildArgs([publicKey.toBase58()], commitment, undefined, epoch !== undefined ? {
+                  epoch: epoch
+                } : undefined);
+                _context17.next = 3;
+                return this._rpcRequest('getStakeActivation', args);
+
+              case 3:
+                unsafeRes = _context17.sent;
+                res = GetStakeActivationResult(unsafeRes);
+
+                if (!res.error) {
+                  _context17.next = 7;
+                  break;
+                }
+
+                throw new Error("failed to get Stake Activation ".concat(publicKey.toBase58(), ": ").concat(res.error.message));
+
+              case 7:
+                assert__default['default'](typeof res.result !== 'undefined');
+                _res$result = res.result, state = _res$result.state, active = _res$result.active, inactive = _res$result.inactive;
+                return _context17.abrupt("return", {
+                  state: state,
+                  active: active,
+                  inactive: inactive
+                });
+
+              case 10:
+              case "end":
+                return _context17.stop();
+            }
+          }
+        }, _callee17, this);
+      }));
+
+      function getStakeActivation(_x28, _x29, _x30) {
+        return _getStakeActivation.apply(this, arguments);
+      }
+
+      return getStakeActivation;
+    }()
+    /**
      * Fetch all the accounts owned by the specified program id
      *
      * @return {Promise<Array<{pubkey: PublicKey, account: AccountInfo<Buffer>}>>}
@@ -3034,22 +3188,22 @@ var Connection = /*#__PURE__*/function () {
   }, {
     key: "getProgramAccounts",
     value: function () {
-      var _getProgramAccounts = _asyncToGenerator__default['default']( /*#__PURE__*/_regeneratorRuntime__default['default'].mark(function _callee17(programId, commitment) {
+      var _getProgramAccounts = _asyncToGenerator__default['default']( /*#__PURE__*/_regeneratorRuntime__default['default'].mark(function _callee18(programId, commitment) {
         var args, unsafeRes, res, result;
-        return _regeneratorRuntime__default['default'].wrap(function _callee17$(_context17) {
+        return _regeneratorRuntime__default['default'].wrap(function _callee18$(_context18) {
           while (1) {
-            switch (_context17.prev = _context17.next) {
+            switch (_context18.prev = _context18.next) {
               case 0:
                 args = this._buildArgs([programId.toBase58()], commitment, 'base64');
-                _context17.next = 3;
+                _context18.next = 3;
                 return this._rpcRequest('getProgramAccounts', args);
 
               case 3:
-                unsafeRes = _context17.sent;
+                unsafeRes = _context18.sent;
                 res = GetProgramAccountsRpcResult(unsafeRes);
 
                 if (!res.error) {
-                  _context17.next = 7;
+                  _context18.next = 7;
                   break;
                 }
 
@@ -3058,7 +3212,7 @@ var Connection = /*#__PURE__*/function () {
               case 7:
                 result = res.result;
                 assert__default['default'](typeof result !== 'undefined');
-                return _context17.abrupt("return", result.map(function (result) {
+                return _context18.abrupt("return", result.map(function (result) {
                   assert__default['default'](result.account.data[1] === 'base64');
                   return {
                     pubkey: new PublicKey(result.pubkey),
@@ -3073,13 +3227,13 @@ var Connection = /*#__PURE__*/function () {
 
               case 10:
               case "end":
-                return _context17.stop();
+                return _context18.stop();
             }
           }
-        }, _callee17, this);
+        }, _callee18, this);
       }));
 
-      function getProgramAccounts(_x28, _x29) {
+      function getProgramAccounts(_x31, _x32) {
         return _getProgramAccounts.apply(this, arguments);
       }
 
@@ -3094,22 +3248,22 @@ var Connection = /*#__PURE__*/function () {
   }, {
     key: "getParsedProgramAccounts",
     value: function () {
-      var _getParsedProgramAccounts = _asyncToGenerator__default['default']( /*#__PURE__*/_regeneratorRuntime__default['default'].mark(function _callee18(programId, commitment) {
+      var _getParsedProgramAccounts = _asyncToGenerator__default['default']( /*#__PURE__*/_regeneratorRuntime__default['default'].mark(function _callee19(programId, commitment) {
         var args, unsafeRes, res, result;
-        return _regeneratorRuntime__default['default'].wrap(function _callee18$(_context18) {
+        return _regeneratorRuntime__default['default'].wrap(function _callee19$(_context19) {
           while (1) {
-            switch (_context18.prev = _context18.next) {
+            switch (_context19.prev = _context19.next) {
               case 0:
                 args = this._buildArgs([programId.toBase58()], commitment, 'jsonParsed');
-                _context18.next = 3;
+                _context19.next = 3;
                 return this._rpcRequest('getProgramAccounts', args);
 
               case 3:
-                unsafeRes = _context18.sent;
+                unsafeRes = _context19.sent;
                 res = GetParsedProgramAccountsRpcResult(unsafeRes);
 
                 if (!res.error) {
-                  _context18.next = 7;
+                  _context19.next = 7;
                   break;
                 }
 
@@ -3118,7 +3272,7 @@ var Connection = /*#__PURE__*/function () {
               case 7:
                 result = res.result;
                 assert__default['default'](typeof result !== 'undefined');
-                return _context18.abrupt("return", result.map(function (result) {
+                return _context19.abrupt("return", result.map(function (result) {
                   var resultData = result.account.data;
                   var data = resultData;
 
@@ -3140,13 +3294,13 @@ var Connection = /*#__PURE__*/function () {
 
               case 10:
               case "end":
-                return _context18.stop();
+                return _context19.stop();
             }
           }
-        }, _callee18, this);
+        }, _callee19, this);
       }));
 
-      function getParsedProgramAccounts(_x30, _x31) {
+      function getParsedProgramAccounts(_x33, _x34) {
         return _getParsedProgramAccounts.apply(this, arguments);
       }
 
@@ -3161,22 +3315,22 @@ var Connection = /*#__PURE__*/function () {
   }, {
     key: "confirmTransaction",
     value: function () {
-      var _confirmTransaction = _asyncToGenerator__default['default']( /*#__PURE__*/_regeneratorRuntime__default['default'].mark(function _callee19(signature, commitment) {
+      var _confirmTransaction = _asyncToGenerator__default['default']( /*#__PURE__*/_regeneratorRuntime__default['default'].mark(function _callee20(signature, commitment) {
         var _this = this;
 
         var decodedSignature, start, subscriptionCommitment, subscriptionId, response, confirmPromise, timeoutMs, duration;
-        return _regeneratorRuntime__default['default'].wrap(function _callee19$(_context19) {
+        return _regeneratorRuntime__default['default'].wrap(function _callee20$(_context20) {
           while (1) {
-            switch (_context19.prev = _context19.next) {
+            switch (_context20.prev = _context20.next) {
               case 0:
-                _context19.prev = 0;
+                _context20.prev = 0;
                 decodedSignature = bs58__default['default'].decode(signature);
-                _context19.next = 7;
+                _context20.next = 7;
                 break;
 
               case 4:
-                _context19.prev = 4;
-                _context19.t0 = _context19["catch"](0);
+                _context20.prev = 4;
+                _context20.t0 = _context20["catch"](0);
                 throw new Error('signature must be base58 encoded: ' + signature);
 
               case 7:
@@ -3199,31 +3353,31 @@ var Connection = /*#__PURE__*/function () {
                   }
                 });
                 timeoutMs = 60 * 1000;
-                _context19.t1 = subscriptionCommitment;
-                _context19.next = _context19.t1 === 'recent' ? 16 : _context19.t1 === 'single' ? 16 : _context19.t1 === 'singleGossip' ? 16 : _context19.t1 === 'max' ? 18 : _context19.t1 === 'root' ? 18 : 18;
+                _context20.t1 = subscriptionCommitment;
+                _context20.next = _context20.t1 === 'recent' ? 16 : _context20.t1 === 'single' ? 16 : _context20.t1 === 'singleGossip' ? 16 : _context20.t1 === 'max' ? 18 : _context20.t1 === 'root' ? 18 : 18;
                 break;
 
               case 16:
                 timeoutMs = 10 * 1000;
-                return _context19.abrupt("break", 18);
+                return _context20.abrupt("break", 18);
 
               case 18:
-                _context19.prev = 18;
-                _context19.next = 21;
+                _context20.prev = 18;
+                _context20.next = 21;
                 return promiseTimeout(confirmPromise, timeoutMs);
 
               case 21:
-                _context19.prev = 21;
+                _context20.prev = 21;
 
                 if (subscriptionId) {
                   this.removeSignatureListener(subscriptionId);
                 }
 
-                return _context19.finish(21);
+                return _context20.finish(21);
 
               case 24:
                 if (!(response === null)) {
-                  _context19.next = 27;
+                  _context20.next = 27;
                   break;
                 }
 
@@ -3231,17 +3385,17 @@ var Connection = /*#__PURE__*/function () {
                 throw new Error("Transaction was not confirmed in ".concat(duration.toFixed(2), " seconds"));
 
               case 27:
-                return _context19.abrupt("return", response);
+                return _context20.abrupt("return", response);
 
               case 28:
               case "end":
-                return _context19.stop();
+                return _context20.stop();
             }
           }
-        }, _callee19, this, [[0, 4], [18,, 21, 24]]);
+        }, _callee20, this, [[0, 4], [18,, 21, 24]]);
       }));
 
-      function confirmTransaction(_x32, _x33) {
+      function confirmTransaction(_x35, _x36) {
         return _confirmTransaction.apply(this, arguments);
       }
 
@@ -3254,21 +3408,21 @@ var Connection = /*#__PURE__*/function () {
   }, {
     key: "getClusterNodes",
     value: function () {
-      var _getClusterNodes = _asyncToGenerator__default['default']( /*#__PURE__*/_regeneratorRuntime__default['default'].mark(function _callee20() {
+      var _getClusterNodes = _asyncToGenerator__default['default']( /*#__PURE__*/_regeneratorRuntime__default['default'].mark(function _callee21() {
         var unsafeRes, res;
-        return _regeneratorRuntime__default['default'].wrap(function _callee20$(_context20) {
+        return _regeneratorRuntime__default['default'].wrap(function _callee21$(_context21) {
           while (1) {
-            switch (_context20.prev = _context20.next) {
+            switch (_context21.prev = _context21.next) {
               case 0:
-                _context20.next = 2;
+                _context21.next = 2;
                 return this._rpcRequest('getClusterNodes', []);
 
               case 2:
-                unsafeRes = _context20.sent;
+                unsafeRes = _context21.sent;
                 res = GetClusterNodes(unsafeRes);
 
                 if (!res.error) {
-                  _context20.next = 6;
+                  _context21.next = 6;
                   break;
                 }
 
@@ -3276,14 +3430,14 @@ var Connection = /*#__PURE__*/function () {
 
               case 6:
                 assert__default['default'](typeof res.result !== 'undefined');
-                return _context20.abrupt("return", res.result);
+                return _context21.abrupt("return", res.result);
 
               case 8:
               case "end":
-                return _context20.stop();
+                return _context21.stop();
             }
           }
-        }, _callee20, this);
+        }, _callee21, this);
       }));
 
       function getClusterNodes() {
@@ -3299,53 +3453,7 @@ var Connection = /*#__PURE__*/function () {
   }, {
     key: "getVoteAccounts",
     value: function () {
-      var _getVoteAccounts = _asyncToGenerator__default['default']( /*#__PURE__*/_regeneratorRuntime__default['default'].mark(function _callee21(commitment) {
-        var args, unsafeRes, res;
-        return _regeneratorRuntime__default['default'].wrap(function _callee21$(_context21) {
-          while (1) {
-            switch (_context21.prev = _context21.next) {
-              case 0:
-                args = this._buildArgs([], commitment);
-                _context21.next = 3;
-                return this._rpcRequest('getVoteAccounts', args);
-
-              case 3:
-                unsafeRes = _context21.sent;
-                res = GetVoteAccounts(unsafeRes); //const res = unsafeRes;
-
-                if (!res.error) {
-                  _context21.next = 7;
-                  break;
-                }
-
-                throw new Error('failed to get vote accounts: ' + res.error.message);
-
-              case 7:
-                assert__default['default'](typeof res.result !== 'undefined');
-                return _context21.abrupt("return", res.result);
-
-              case 9:
-              case "end":
-                return _context21.stop();
-            }
-          }
-        }, _callee21, this);
-      }));
-
-      function getVoteAccounts(_x34) {
-        return _getVoteAccounts.apply(this, arguments);
-      }
-
-      return getVoteAccounts;
-    }()
-    /**
-     * Fetch the current slot that the node is processing
-     */
-
-  }, {
-    key: "getSlot",
-    value: function () {
-      var _getSlot = _asyncToGenerator__default['default']( /*#__PURE__*/_regeneratorRuntime__default['default'].mark(function _callee22(commitment) {
+      var _getVoteAccounts = _asyncToGenerator__default['default']( /*#__PURE__*/_regeneratorRuntime__default['default'].mark(function _callee22(commitment) {
         var args, unsafeRes, res;
         return _regeneratorRuntime__default['default'].wrap(function _callee22$(_context22) {
           while (1) {
@@ -3353,18 +3461,18 @@ var Connection = /*#__PURE__*/function () {
               case 0:
                 args = this._buildArgs([], commitment);
                 _context22.next = 3;
-                return this._rpcRequest('getSlot', args);
+                return this._rpcRequest('getVoteAccounts', args);
 
               case 3:
                 unsafeRes = _context22.sent;
-                res = GetSlot(unsafeRes);
+                res = GetVoteAccounts(unsafeRes); //const res = unsafeRes;
 
                 if (!res.error) {
                   _context22.next = 7;
                   break;
                 }
 
-                throw new Error('failed to get slot: ' + res.error.message);
+                throw new Error('failed to get vote accounts: ' + res.error.message);
 
               case 7:
                 assert__default['default'](typeof res.result !== 'undefined');
@@ -3378,20 +3486,20 @@ var Connection = /*#__PURE__*/function () {
         }, _callee22, this);
       }));
 
-      function getSlot(_x35) {
-        return _getSlot.apply(this, arguments);
+      function getVoteAccounts(_x37) {
+        return _getVoteAccounts.apply(this, arguments);
       }
 
-      return getSlot;
+      return getVoteAccounts;
     }()
     /**
-     * Fetch the current slot leader of the cluster
+     * Fetch the current slot that the node is processing
      */
 
   }, {
-    key: "getSlotLeader",
+    key: "getSlot",
     value: function () {
-      var _getSlotLeader = _asyncToGenerator__default['default']( /*#__PURE__*/_regeneratorRuntime__default['default'].mark(function _callee23(commitment) {
+      var _getSlot = _asyncToGenerator__default['default']( /*#__PURE__*/_regeneratorRuntime__default['default'].mark(function _callee23(commitment) {
         var args, unsafeRes, res;
         return _regeneratorRuntime__default['default'].wrap(function _callee23$(_context23) {
           while (1) {
@@ -3399,18 +3507,18 @@ var Connection = /*#__PURE__*/function () {
               case 0:
                 args = this._buildArgs([], commitment);
                 _context23.next = 3;
-                return this._rpcRequest('getSlotLeader', args);
+                return this._rpcRequest('getSlot', args);
 
               case 3:
                 unsafeRes = _context23.sent;
-                res = GetSlotLeader(unsafeRes);
+                res = GetSlot(unsafeRes);
 
                 if (!res.error) {
                   _context23.next = 7;
                   break;
                 }
 
-                throw new Error('failed to get slot leader: ' + res.error.message);
+                throw new Error('failed to get slot: ' + res.error.message);
 
               case 7:
                 assert__default['default'](typeof res.result !== 'undefined');
@@ -3424,7 +3532,53 @@ var Connection = /*#__PURE__*/function () {
         }, _callee23, this);
       }));
 
-      function getSlotLeader(_x36) {
+      function getSlot(_x38) {
+        return _getSlot.apply(this, arguments);
+      }
+
+      return getSlot;
+    }()
+    /**
+     * Fetch the current slot leader of the cluster
+     */
+
+  }, {
+    key: "getSlotLeader",
+    value: function () {
+      var _getSlotLeader = _asyncToGenerator__default['default']( /*#__PURE__*/_regeneratorRuntime__default['default'].mark(function _callee24(commitment) {
+        var args, unsafeRes, res;
+        return _regeneratorRuntime__default['default'].wrap(function _callee24$(_context24) {
+          while (1) {
+            switch (_context24.prev = _context24.next) {
+              case 0:
+                args = this._buildArgs([], commitment);
+                _context24.next = 3;
+                return this._rpcRequest('getSlotLeader', args);
+
+              case 3:
+                unsafeRes = _context24.sent;
+                res = GetSlotLeader(unsafeRes);
+
+                if (!res.error) {
+                  _context24.next = 7;
+                  break;
+                }
+
+                throw new Error('failed to get slot leader: ' + res.error.message);
+
+              case 7:
+                assert__default['default'](typeof res.result !== 'undefined');
+                return _context24.abrupt("return", res.result);
+
+              case 9:
+              case "end":
+                return _context24.stop();
+            }
+          }
+        }, _callee24, this);
+      }));
+
+      function getSlotLeader(_x39) {
         return _getSlotLeader.apply(this, arguments);
       }
 
@@ -3437,35 +3591,35 @@ var Connection = /*#__PURE__*/function () {
   }, {
     key: "getSignatureStatus",
     value: function () {
-      var _getSignatureStatus = _asyncToGenerator__default['default']( /*#__PURE__*/_regeneratorRuntime__default['default'].mark(function _callee24(signature, config) {
+      var _getSignatureStatus = _asyncToGenerator__default['default']( /*#__PURE__*/_regeneratorRuntime__default['default'].mark(function _callee25(signature, config) {
         var _yield$this$getSignat, context, value;
 
-        return _regeneratorRuntime__default['default'].wrap(function _callee24$(_context24) {
+        return _regeneratorRuntime__default['default'].wrap(function _callee25$(_context25) {
           while (1) {
-            switch (_context24.prev = _context24.next) {
+            switch (_context25.prev = _context25.next) {
               case 0:
-                _context24.next = 2;
+                _context25.next = 2;
                 return this.getSignatureStatuses([signature], config);
 
               case 2:
-                _yield$this$getSignat = _context24.sent;
+                _yield$this$getSignat = _context25.sent;
                 context = _yield$this$getSignat.context;
                 value = _yield$this$getSignat.value;
                 assert__default['default'](value.length === 1);
-                return _context24.abrupt("return", {
+                return _context25.abrupt("return", {
                   context: context,
                   value: value[0]
                 });
 
               case 7:
               case "end":
-                return _context24.stop();
+                return _context25.stop();
             }
           }
-        }, _callee24, this);
+        }, _callee25, this);
       }));
 
-      function getSignatureStatus(_x37, _x38) {
+      function getSignatureStatus(_x40, _x41) {
         return _getSignatureStatus.apply(this, arguments);
       }
 
@@ -3478,11 +3632,11 @@ var Connection = /*#__PURE__*/function () {
   }, {
     key: "getSignatureStatuses",
     value: function () {
-      var _getSignatureStatuses = _asyncToGenerator__default['default']( /*#__PURE__*/_regeneratorRuntime__default['default'].mark(function _callee25(signatures, config) {
+      var _getSignatureStatuses = _asyncToGenerator__default['default']( /*#__PURE__*/_regeneratorRuntime__default['default'].mark(function _callee26(signatures, config) {
         var params, unsafeRes, res;
-        return _regeneratorRuntime__default['default'].wrap(function _callee25$(_context25) {
+        return _regeneratorRuntime__default['default'].wrap(function _callee26$(_context26) {
           while (1) {
-            switch (_context25.prev = _context25.next) {
+            switch (_context26.prev = _context26.next) {
               case 0:
                 params = [signatures];
 
@@ -3490,15 +3644,15 @@ var Connection = /*#__PURE__*/function () {
                   params.push(config);
                 }
 
-                _context25.next = 4;
+                _context26.next = 4;
                 return this._rpcRequest('getSignatureStatuses', params);
 
               case 4:
-                unsafeRes = _context25.sent;
+                unsafeRes = _context26.sent;
                 res = GetSignatureStatusesRpcResult(unsafeRes);
 
                 if (!res.error) {
-                  _context25.next = 8;
+                  _context26.next = 8;
                   break;
                 }
 
@@ -3506,17 +3660,17 @@ var Connection = /*#__PURE__*/function () {
 
               case 8:
                 assert__default['default'](typeof res.result !== 'undefined');
-                return _context25.abrupt("return", res.result);
+                return _context26.abrupt("return", res.result);
 
               case 10:
               case "end":
-                return _context25.stop();
+                return _context26.stop();
             }
           }
-        }, _callee25, this);
+        }, _callee26, this);
       }));
 
-      function getSignatureStatuses(_x39, _x40) {
+      function getSignatureStatuses(_x42, _x43) {
         return _getSignatureStatuses.apply(this, arguments);
       }
 
@@ -3529,53 +3683,7 @@ var Connection = /*#__PURE__*/function () {
   }, {
     key: "getTransactionCount",
     value: function () {
-      var _getTransactionCount = _asyncToGenerator__default['default']( /*#__PURE__*/_regeneratorRuntime__default['default'].mark(function _callee26(commitment) {
-        var args, unsafeRes, res;
-        return _regeneratorRuntime__default['default'].wrap(function _callee26$(_context26) {
-          while (1) {
-            switch (_context26.prev = _context26.next) {
-              case 0:
-                args = this._buildArgs([], commitment);
-                _context26.next = 3;
-                return this._rpcRequest('getTransactionCount', args);
-
-              case 3:
-                unsafeRes = _context26.sent;
-                res = GetTransactionCountRpcResult(unsafeRes);
-
-                if (!res.error) {
-                  _context26.next = 7;
-                  break;
-                }
-
-                throw new Error('failed to get transaction count: ' + res.error.message);
-
-              case 7:
-                assert__default['default'](typeof res.result !== 'undefined');
-                return _context26.abrupt("return", Number(res.result));
-
-              case 9:
-              case "end":
-                return _context26.stop();
-            }
-          }
-        }, _callee26, this);
-      }));
-
-      function getTransactionCount(_x41) {
-        return _getTransactionCount.apply(this, arguments);
-      }
-
-      return getTransactionCount;
-    }()
-    /**
-     * Fetch the current total currency supply of the cluster in lamports
-     */
-
-  }, {
-    key: "getTotalSupply",
-    value: function () {
-      var _getTotalSupply = _asyncToGenerator__default['default']( /*#__PURE__*/_regeneratorRuntime__default['default'].mark(function _callee27(commitment) {
+      var _getTransactionCount = _asyncToGenerator__default['default']( /*#__PURE__*/_regeneratorRuntime__default['default'].mark(function _callee27(commitment) {
         var args, unsafeRes, res;
         return _regeneratorRuntime__default['default'].wrap(function _callee27$(_context27) {
           while (1) {
@@ -3583,18 +3691,18 @@ var Connection = /*#__PURE__*/function () {
               case 0:
                 args = this._buildArgs([], commitment);
                 _context27.next = 3;
-                return this._rpcRequest('getTotalSupply', args);
+                return this._rpcRequest('getTransactionCount', args);
 
               case 3:
                 unsafeRes = _context27.sent;
-                res = GetTotalSupplyRpcResult(unsafeRes);
+                res = GetTransactionCountRpcResult(unsafeRes);
 
                 if (!res.error) {
                   _context27.next = 7;
                   break;
                 }
 
-                throw new Error('faied to get total supply: ' + res.error.message);
+                throw new Error('failed to get transaction count: ' + res.error.message);
 
               case 7:
                 assert__default['default'](typeof res.result !== 'undefined');
@@ -3608,7 +3716,53 @@ var Connection = /*#__PURE__*/function () {
         }, _callee27, this);
       }));
 
-      function getTotalSupply(_x42) {
+      function getTransactionCount(_x44) {
+        return _getTransactionCount.apply(this, arguments);
+      }
+
+      return getTransactionCount;
+    }()
+    /**
+     * Fetch the current total currency supply of the cluster in lamports
+     */
+
+  }, {
+    key: "getTotalSupply",
+    value: function () {
+      var _getTotalSupply = _asyncToGenerator__default['default']( /*#__PURE__*/_regeneratorRuntime__default['default'].mark(function _callee28(commitment) {
+        var args, unsafeRes, res;
+        return _regeneratorRuntime__default['default'].wrap(function _callee28$(_context28) {
+          while (1) {
+            switch (_context28.prev = _context28.next) {
+              case 0:
+                args = this._buildArgs([], commitment);
+                _context28.next = 3;
+                return this._rpcRequest('getTotalSupply', args);
+
+              case 3:
+                unsafeRes = _context28.sent;
+                res = GetTotalSupplyRpcResult(unsafeRes);
+
+                if (!res.error) {
+                  _context28.next = 7;
+                  break;
+                }
+
+                throw new Error('faied to get total supply: ' + res.error.message);
+
+              case 7:
+                assert__default['default'](typeof res.result !== 'undefined');
+                return _context28.abrupt("return", Number(res.result));
+
+              case 9:
+              case "end":
+                return _context28.stop();
+            }
+          }
+        }, _callee28, this);
+      }));
+
+      function getTotalSupply(_x45) {
         return _getTotalSupply.apply(this, arguments);
       }
 
@@ -3621,22 +3775,22 @@ var Connection = /*#__PURE__*/function () {
   }, {
     key: "getInflationGovernor",
     value: function () {
-      var _getInflationGovernor = _asyncToGenerator__default['default']( /*#__PURE__*/_regeneratorRuntime__default['default'].mark(function _callee28(commitment) {
+      var _getInflationGovernor = _asyncToGenerator__default['default']( /*#__PURE__*/_regeneratorRuntime__default['default'].mark(function _callee29(commitment) {
         var args, unsafeRes, res;
-        return _regeneratorRuntime__default['default'].wrap(function _callee28$(_context28) {
+        return _regeneratorRuntime__default['default'].wrap(function _callee29$(_context29) {
           while (1) {
-            switch (_context28.prev = _context28.next) {
+            switch (_context29.prev = _context29.next) {
               case 0:
                 args = this._buildArgs([], commitment);
-                _context28.next = 3;
+                _context29.next = 3;
                 return this._rpcRequest('getInflationGovernor', args);
 
               case 3:
-                unsafeRes = _context28.sent;
+                unsafeRes = _context29.sent;
                 res = GetInflationGovernorRpcResult(unsafeRes);
 
                 if (!res.error) {
-                  _context28.next = 7;
+                  _context29.next = 7;
                   break;
                 }
 
@@ -3644,17 +3798,17 @@ var Connection = /*#__PURE__*/function () {
 
               case 7:
                 assert__default['default'](typeof res.result !== 'undefined');
-                return _context28.abrupt("return", GetInflationGovernorResult(res.result));
+                return _context29.abrupt("return", GetInflationGovernorResult(res.result));
 
               case 9:
               case "end":
-                return _context28.stop();
+                return _context29.stop();
             }
           }
-        }, _callee28, this);
+        }, _callee29, this);
       }));
 
-      function getInflationGovernor(_x43) {
+      function getInflationGovernor(_x46) {
         return _getInflationGovernor.apply(this, arguments);
       }
 
@@ -3667,22 +3821,22 @@ var Connection = /*#__PURE__*/function () {
   }, {
     key: "getEpochInfo",
     value: function () {
-      var _getEpochInfo = _asyncToGenerator__default['default']( /*#__PURE__*/_regeneratorRuntime__default['default'].mark(function _callee29(commitment) {
+      var _getEpochInfo = _asyncToGenerator__default['default']( /*#__PURE__*/_regeneratorRuntime__default['default'].mark(function _callee30(commitment) {
         var args, unsafeRes, res;
-        return _regeneratorRuntime__default['default'].wrap(function _callee29$(_context29) {
+        return _regeneratorRuntime__default['default'].wrap(function _callee30$(_context30) {
           while (1) {
-            switch (_context29.prev = _context29.next) {
+            switch (_context30.prev = _context30.next) {
               case 0:
                 args = this._buildArgs([], commitment);
-                _context29.next = 3;
+                _context30.next = 3;
                 return this._rpcRequest('getEpochInfo', args);
 
               case 3:
-                unsafeRes = _context29.sent;
+                unsafeRes = _context30.sent;
                 res = GetEpochInfoRpcResult(unsafeRes);
 
                 if (!res.error) {
-                  _context29.next = 7;
+                  _context30.next = 7;
                   break;
                 }
 
@@ -3690,17 +3844,17 @@ var Connection = /*#__PURE__*/function () {
 
               case 7:
                 assert__default['default'](typeof res.result !== 'undefined');
-                return _context29.abrupt("return", GetEpochInfoResult(res.result));
+                return _context30.abrupt("return", GetEpochInfoResult(res.result));
 
               case 9:
               case "end":
-                return _context29.stop();
+                return _context30.stop();
             }
           }
-        }, _callee29, this);
+        }, _callee30, this);
       }));
 
-      function getEpochInfo(_x44) {
+      function getEpochInfo(_x47) {
         return _getEpochInfo.apply(this, arguments);
       }
 
@@ -3713,21 +3867,21 @@ var Connection = /*#__PURE__*/function () {
   }, {
     key: "getEpochSchedule",
     value: function () {
-      var _getEpochSchedule = _asyncToGenerator__default['default']( /*#__PURE__*/_regeneratorRuntime__default['default'].mark(function _callee30() {
+      var _getEpochSchedule = _asyncToGenerator__default['default']( /*#__PURE__*/_regeneratorRuntime__default['default'].mark(function _callee31() {
         var unsafeRes, res;
-        return _regeneratorRuntime__default['default'].wrap(function _callee30$(_context30) {
+        return _regeneratorRuntime__default['default'].wrap(function _callee31$(_context31) {
           while (1) {
-            switch (_context30.prev = _context30.next) {
+            switch (_context31.prev = _context31.next) {
               case 0:
-                _context30.next = 2;
+                _context31.next = 2;
                 return this._rpcRequest('getEpochSchedule', []);
 
               case 2:
-                unsafeRes = _context30.sent;
+                unsafeRes = _context31.sent;
                 res = GetEpochScheduleRpcResult(unsafeRes);
 
                 if (!res.error) {
-                  _context30.next = 6;
+                  _context31.next = 6;
                   break;
                 }
 
@@ -3735,14 +3889,14 @@ var Connection = /*#__PURE__*/function () {
 
               case 6:
                 assert__default['default'](typeof res.result !== 'undefined');
-                return _context30.abrupt("return", GetEpochScheduleResult(res.result));
+                return _context31.abrupt("return", GetEpochScheduleResult(res.result));
 
               case 8:
               case "end":
-                return _context30.stop();
+                return _context31.stop();
             }
           }
-        }, _callee30, this);
+        }, _callee31, this);
       }));
 
       function getEpochSchedule() {
@@ -3759,21 +3913,21 @@ var Connection = /*#__PURE__*/function () {
   }, {
     key: "getLeaderSchedule",
     value: function () {
-      var _getLeaderSchedule = _asyncToGenerator__default['default']( /*#__PURE__*/_regeneratorRuntime__default['default'].mark(function _callee31() {
+      var _getLeaderSchedule = _asyncToGenerator__default['default']( /*#__PURE__*/_regeneratorRuntime__default['default'].mark(function _callee32() {
         var unsafeRes, res;
-        return _regeneratorRuntime__default['default'].wrap(function _callee31$(_context31) {
+        return _regeneratorRuntime__default['default'].wrap(function _callee32$(_context32) {
           while (1) {
-            switch (_context31.prev = _context31.next) {
+            switch (_context32.prev = _context32.next) {
               case 0:
-                _context31.next = 2;
+                _context32.next = 2;
                 return this._rpcRequest('getLeaderSchedule', []);
 
               case 2:
-                unsafeRes = _context31.sent;
+                unsafeRes = _context32.sent;
                 res = GetLeaderScheduleRpcResult(unsafeRes);
 
                 if (!res.error) {
-                  _context31.next = 6;
+                  _context32.next = 6;
                   break;
                 }
 
@@ -3781,14 +3935,14 @@ var Connection = /*#__PURE__*/function () {
 
               case 6:
                 assert__default['default'](typeof res.result !== 'undefined');
-                return _context31.abrupt("return", res.result);
+                return _context32.abrupt("return", res.result);
 
               case 8:
               case "end":
-                return _context31.stop();
+                return _context32.stop();
             }
           }
-        }, _callee31, this);
+        }, _callee32, this);
       }));
 
       function getLeaderSchedule() {
@@ -3805,41 +3959,41 @@ var Connection = /*#__PURE__*/function () {
   }, {
     key: "getMinimumBalanceForRentExemption",
     value: function () {
-      var _getMinimumBalanceForRentExemption = _asyncToGenerator__default['default']( /*#__PURE__*/_regeneratorRuntime__default['default'].mark(function _callee32(dataLength, commitment) {
+      var _getMinimumBalanceForRentExemption = _asyncToGenerator__default['default']( /*#__PURE__*/_regeneratorRuntime__default['default'].mark(function _callee33(dataLength, commitment) {
         var args, unsafeRes, res;
-        return _regeneratorRuntime__default['default'].wrap(function _callee32$(_context32) {
+        return _regeneratorRuntime__default['default'].wrap(function _callee33$(_context33) {
           while (1) {
-            switch (_context32.prev = _context32.next) {
+            switch (_context33.prev = _context33.next) {
               case 0:
                 args = this._buildArgs([dataLength], commitment);
-                _context32.next = 3;
+                _context33.next = 3;
                 return this._rpcRequest('getMinimumBalanceForRentExemption', args);
 
               case 3:
-                unsafeRes = _context32.sent;
+                unsafeRes = _context33.sent;
                 res = GetMinimumBalanceForRentExemptionRpcResult(unsafeRes);
 
                 if (!res.error) {
-                  _context32.next = 8;
+                  _context33.next = 8;
                   break;
                 }
 
                 console.warn('Unable to fetch minimum balance for rent exemption');
-                return _context32.abrupt("return", 0);
+                return _context33.abrupt("return", 0);
 
               case 8:
                 assert__default['default'](typeof res.result !== 'undefined');
-                return _context32.abrupt("return", Number(res.result));
+                return _context33.abrupt("return", Number(res.result));
 
               case 10:
               case "end":
-                return _context32.stop();
+                return _context33.stop();
             }
           }
-        }, _callee32, this);
+        }, _callee33, this);
       }));
 
-      function getMinimumBalanceForRentExemption(_x45, _x46) {
+      function getMinimumBalanceForRentExemption(_x48, _x49) {
         return _getMinimumBalanceForRentExemption.apply(this, arguments);
       }
 
@@ -3853,22 +4007,22 @@ var Connection = /*#__PURE__*/function () {
   }, {
     key: "getRecentBlockhashAndContext",
     value: function () {
-      var _getRecentBlockhashAndContext = _asyncToGenerator__default['default']( /*#__PURE__*/_regeneratorRuntime__default['default'].mark(function _callee33(commitment) {
+      var _getRecentBlockhashAndContext = _asyncToGenerator__default['default']( /*#__PURE__*/_regeneratorRuntime__default['default'].mark(function _callee34(commitment) {
         var args, unsafeRes, res;
-        return _regeneratorRuntime__default['default'].wrap(function _callee33$(_context33) {
+        return _regeneratorRuntime__default['default'].wrap(function _callee34$(_context34) {
           while (1) {
-            switch (_context33.prev = _context33.next) {
+            switch (_context34.prev = _context34.next) {
               case 0:
                 args = this._buildArgs([], commitment);
-                _context33.next = 3;
+                _context34.next = 3;
                 return this._rpcRequest('getRecentBlockhash', args);
 
               case 3:
-                unsafeRes = _context33.sent;
+                unsafeRes = _context34.sent;
                 res = GetRecentBlockhashAndContextRpcResult(unsafeRes);
 
                 if (!res.error) {
-                  _context33.next = 7;
+                  _context34.next = 7;
                   break;
                 }
 
@@ -3876,17 +4030,17 @@ var Connection = /*#__PURE__*/function () {
 
               case 7:
                 assert__default['default'](typeof res.result !== 'undefined');
-                return _context33.abrupt("return", res.result);
+                return _context34.abrupt("return", res.result);
 
               case 9:
               case "end":
-                return _context33.stop();
+                return _context34.stop();
             }
           }
-        }, _callee33, this);
+        }, _callee34, this);
       }));
 
-      function getRecentBlockhashAndContext(_x47) {
+      function getRecentBlockhashAndContext(_x50) {
         return _getRecentBlockhashAndContext.apply(this, arguments);
       }
 
@@ -3899,23 +4053,23 @@ var Connection = /*#__PURE__*/function () {
   }, {
     key: "getFeeCalculatorForBlockhash",
     value: function () {
-      var _getFeeCalculatorForBlockhash = _asyncToGenerator__default['default']( /*#__PURE__*/_regeneratorRuntime__default['default'].mark(function _callee34(blockhash, commitment) {
-        var args, unsafeRes, res, _res$result, context, value;
+      var _getFeeCalculatorForBlockhash = _asyncToGenerator__default['default']( /*#__PURE__*/_regeneratorRuntime__default['default'].mark(function _callee35(blockhash, commitment) {
+        var args, unsafeRes, res, _res$result2, context, value;
 
-        return _regeneratorRuntime__default['default'].wrap(function _callee34$(_context34) {
+        return _regeneratorRuntime__default['default'].wrap(function _callee35$(_context35) {
           while (1) {
-            switch (_context34.prev = _context34.next) {
+            switch (_context35.prev = _context35.next) {
               case 0:
                 args = this._buildArgs([blockhash], commitment);
-                _context34.next = 3;
+                _context35.next = 3;
                 return this._rpcRequest('getFeeCalculatorForBlockhash', args);
 
               case 3:
-                unsafeRes = _context34.sent;
+                unsafeRes = _context35.sent;
                 res = GetFeeCalculatorRpcResult(unsafeRes);
 
                 if (!res.error) {
-                  _context34.next = 7;
+                  _context35.next = 7;
                   break;
                 }
 
@@ -3923,21 +4077,21 @@ var Connection = /*#__PURE__*/function () {
 
               case 7:
                 assert__default['default'](typeof res.result !== 'undefined');
-                _res$result = res.result, context = _res$result.context, value = _res$result.value;
-                return _context34.abrupt("return", {
+                _res$result2 = res.result, context = _res$result2.context, value = _res$result2.value;
+                return _context35.abrupt("return", {
                   context: context,
                   value: value && value.feeCalculator
                 });
 
               case 10:
               case "end":
-                return _context34.stop();
+                return _context35.stop();
             }
           }
-        }, _callee34, this);
+        }, _callee35, this);
       }));
 
-      function getFeeCalculatorForBlockhash(_x48, _x49) {
+      function getFeeCalculatorForBlockhash(_x51, _x52) {
         return _getFeeCalculatorForBlockhash.apply(this, arguments);
       }
 
@@ -3951,12 +4105,12 @@ var Connection = /*#__PURE__*/function () {
   }, {
     key: "getRecentBlockhash",
     value: function () {
-      var _getRecentBlockhash = _asyncToGenerator__default['default']( /*#__PURE__*/_regeneratorRuntime__default['default'].mark(function _callee35(commitment) {
-        return _regeneratorRuntime__default['default'].wrap(function _callee35$(_context35) {
+      var _getRecentBlockhash = _asyncToGenerator__default['default']( /*#__PURE__*/_regeneratorRuntime__default['default'].mark(function _callee36(commitment) {
+        return _regeneratorRuntime__default['default'].wrap(function _callee36$(_context36) {
           while (1) {
-            switch (_context35.prev = _context35.next) {
+            switch (_context36.prev = _context36.next) {
               case 0:
-                _context35.next = 2;
+                _context36.next = 2;
                 return this.getRecentBlockhashAndContext(commitment).then(function (x) {
                   return x.value;
                 })["catch"](function (e) {
@@ -3964,17 +4118,17 @@ var Connection = /*#__PURE__*/function () {
                 });
 
               case 2:
-                return _context35.abrupt("return", _context35.sent);
+                return _context36.abrupt("return", _context36.sent);
 
               case 3:
               case "end":
-                return _context35.stop();
+                return _context36.stop();
             }
           }
-        }, _callee35, this);
+        }, _callee36, this);
       }));
 
-      function getRecentBlockhash(_x50) {
+      function getRecentBlockhash(_x53) {
         return _getRecentBlockhash.apply(this, arguments);
       }
 
@@ -3987,21 +4141,21 @@ var Connection = /*#__PURE__*/function () {
   }, {
     key: "getVersion",
     value: function () {
-      var _getVersion = _asyncToGenerator__default['default']( /*#__PURE__*/_regeneratorRuntime__default['default'].mark(function _callee36() {
+      var _getVersion = _asyncToGenerator__default['default']( /*#__PURE__*/_regeneratorRuntime__default['default'].mark(function _callee37() {
         var unsafeRes, res;
-        return _regeneratorRuntime__default['default'].wrap(function _callee36$(_context36) {
+        return _regeneratorRuntime__default['default'].wrap(function _callee37$(_context37) {
           while (1) {
-            switch (_context36.prev = _context36.next) {
+            switch (_context37.prev = _context37.next) {
               case 0:
-                _context36.next = 2;
+                _context37.next = 2;
                 return this._rpcRequest('getVersion', []);
 
               case 2:
-                unsafeRes = _context36.sent;
+                unsafeRes = _context37.sent;
                 res = GetVersionRpcResult(unsafeRes);
 
                 if (!res.error) {
-                  _context36.next = 6;
+                  _context37.next = 6;
                   break;
                 }
 
@@ -4009,14 +4163,14 @@ var Connection = /*#__PURE__*/function () {
 
               case 6:
                 assert__default['default'](typeof res.result !== 'undefined');
-                return _context36.abrupt("return", res.result);
+                return _context37.abrupt("return", res.result);
 
               case 8:
               case "end":
-                return _context36.stop();
+                return _context37.stop();
             }
           }
-        }, _callee36, this);
+        }, _callee37, this);
       }));
 
       function getVersion() {
@@ -4033,22 +4187,22 @@ var Connection = /*#__PURE__*/function () {
   }, {
     key: "getConfirmedBlock",
     value: function () {
-      var _getConfirmedBlock = _asyncToGenerator__default['default']( /*#__PURE__*/_regeneratorRuntime__default['default'].mark(function _callee37(slot) {
+      var _getConfirmedBlock = _asyncToGenerator__default['default']( /*#__PURE__*/_regeneratorRuntime__default['default'].mark(function _callee38(slot) {
         var unsafeRes, _GetConfirmedBlockRpc, result, error;
 
-        return _regeneratorRuntime__default['default'].wrap(function _callee37$(_context37) {
+        return _regeneratorRuntime__default['default'].wrap(function _callee38$(_context38) {
           while (1) {
-            switch (_context37.prev = _context37.next) {
+            switch (_context38.prev = _context38.next) {
               case 0:
-                _context37.next = 2;
+                _context38.next = 2;
                 return this._rpcRequest('getConfirmedBlock', [slot]);
 
               case 2:
-                unsafeRes = _context37.sent;
+                unsafeRes = _context38.sent;
                 _GetConfirmedBlockRpc = GetConfirmedBlockRpcResult(unsafeRes), result = _GetConfirmedBlockRpc.result, error = _GetConfirmedBlockRpc.error;
 
                 if (!error) {
-                  _context37.next = 6;
+                  _context38.next = 6;
                   break;
                 }
 
@@ -4058,14 +4212,14 @@ var Connection = /*#__PURE__*/function () {
                 assert__default['default'](typeof result !== 'undefined');
 
                 if (result) {
-                  _context37.next = 9;
+                  _context38.next = 9;
                   break;
                 }
 
                 throw new Error('Confirmed block ' + slot + ' not found');
 
               case 9:
-                return _context37.abrupt("return", {
+                return _context38.abrupt("return", {
                   blockhash: new PublicKey(result.blockhash).toString(),
                   previousBlockhash: new PublicKey(result.previousBlockhash).toString(),
                   parentSlot: result.parentSlot,
@@ -4083,13 +4237,13 @@ var Connection = /*#__PURE__*/function () {
 
               case 10:
               case "end":
-                return _context37.stop();
+                return _context38.stop();
             }
           }
-        }, _callee37, this);
+        }, _callee38, this);
       }));
 
-      function getConfirmedBlock(_x51) {
+      function getConfirmedBlock(_x54) {
         return _getConfirmedBlock.apply(this, arguments);
       }
 
@@ -4102,79 +4256,19 @@ var Connection = /*#__PURE__*/function () {
   }, {
     key: "getConfirmedTransaction",
     value: function () {
-      var _getConfirmedTransaction = _asyncToGenerator__default['default']( /*#__PURE__*/_regeneratorRuntime__default['default'].mark(function _callee38(signature) {
+      var _getConfirmedTransaction = _asyncToGenerator__default['default']( /*#__PURE__*/_regeneratorRuntime__default['default'].mark(function _callee39(signature) {
         var unsafeRes, _GetConfirmedTransact, result, error, _result$transaction2, message, signatures;
-
-        return _regeneratorRuntime__default['default'].wrap(function _callee38$(_context38) {
-          while (1) {
-            switch (_context38.prev = _context38.next) {
-              case 0:
-                _context38.next = 2;
-                return this._rpcRequest('getConfirmedTransaction', [signature]);
-
-              case 2:
-                unsafeRes = _context38.sent;
-                _GetConfirmedTransact = GetConfirmedTransactionRpcResult(unsafeRes), result = _GetConfirmedTransact.result, error = _GetConfirmedTransact.error;
-
-                if (!error) {
-                  _context38.next = 6;
-                  break;
-                }
-
-                throw new Error('failed to get confirmed transaction: ' + error.message);
-
-              case 6:
-                assert__default['default'](typeof result !== 'undefined');
-
-                if (!(result === null)) {
-                  _context38.next = 9;
-                  break;
-                }
-
-                return _context38.abrupt("return", result);
-
-              case 9:
-                _result$transaction2 = result.transaction, message = _result$transaction2.message, signatures = _result$transaction2.signatures;
-                return _context38.abrupt("return", {
-                  slot: result.slot,
-                  transaction: Transaction.populate(new Message(message), signatures),
-                  meta: result.meta
-                });
-
-              case 11:
-              case "end":
-                return _context38.stop();
-            }
-          }
-        }, _callee38, this);
-      }));
-
-      function getConfirmedTransaction(_x52) {
-        return _getConfirmedTransaction.apply(this, arguments);
-      }
-
-      return getConfirmedTransaction;
-    }()
-    /**
-     * Fetch parsed transaction details for a confirmed transaction
-     */
-
-  }, {
-    key: "getParsedConfirmedTransaction",
-    value: function () {
-      var _getParsedConfirmedTransaction = _asyncToGenerator__default['default']( /*#__PURE__*/_regeneratorRuntime__default['default'].mark(function _callee39(signature) {
-        var unsafeRes, _GetParsedConfirmedTr, result, error, _result$transaction$m, accountKeys, instructions, recentBlockhash;
 
         return _regeneratorRuntime__default['default'].wrap(function _callee39$(_context39) {
           while (1) {
             switch (_context39.prev = _context39.next) {
               case 0:
                 _context39.next = 2;
-                return this._rpcRequest('getConfirmedTransaction', [signature, 'jsonParsed']);
+                return this._rpcRequest('getConfirmedTransaction', [signature]);
 
               case 2:
                 unsafeRes = _context39.sent;
-                _GetParsedConfirmedTr = GetParsedConfirmedTransactionRpcResult(unsafeRes), result = _GetParsedConfirmedTr.result, error = _GetParsedConfirmedTr.error;
+                _GetConfirmedTransact = GetConfirmedTransactionRpcResult(unsafeRes), result = _GetConfirmedTransact.result, error = _GetConfirmedTransact.error;
 
                 if (!error) {
                   _context39.next = 6;
@@ -4194,8 +4288,68 @@ var Connection = /*#__PURE__*/function () {
                 return _context39.abrupt("return", result);
 
               case 9:
-                _result$transaction$m = result.transaction.message, accountKeys = _result$transaction$m.accountKeys, instructions = _result$transaction$m.instructions, recentBlockhash = _result$transaction$m.recentBlockhash;
+                _result$transaction2 = result.transaction, message = _result$transaction2.message, signatures = _result$transaction2.signatures;
                 return _context39.abrupt("return", {
+                  slot: result.slot,
+                  transaction: Transaction.populate(new Message(message), signatures),
+                  meta: result.meta
+                });
+
+              case 11:
+              case "end":
+                return _context39.stop();
+            }
+          }
+        }, _callee39, this);
+      }));
+
+      function getConfirmedTransaction(_x55) {
+        return _getConfirmedTransaction.apply(this, arguments);
+      }
+
+      return getConfirmedTransaction;
+    }()
+    /**
+     * Fetch parsed transaction details for a confirmed transaction
+     */
+
+  }, {
+    key: "getParsedConfirmedTransaction",
+    value: function () {
+      var _getParsedConfirmedTransaction = _asyncToGenerator__default['default']( /*#__PURE__*/_regeneratorRuntime__default['default'].mark(function _callee40(signature) {
+        var unsafeRes, _GetParsedConfirmedTr, result, error, _result$transaction$m, accountKeys, instructions, recentBlockhash;
+
+        return _regeneratorRuntime__default['default'].wrap(function _callee40$(_context40) {
+          while (1) {
+            switch (_context40.prev = _context40.next) {
+              case 0:
+                _context40.next = 2;
+                return this._rpcRequest('getConfirmedTransaction', [signature, 'jsonParsed']);
+
+              case 2:
+                unsafeRes = _context40.sent;
+                _GetParsedConfirmedTr = GetParsedConfirmedTransactionRpcResult(unsafeRes), result = _GetParsedConfirmedTr.result, error = _GetParsedConfirmedTr.error;
+
+                if (!error) {
+                  _context40.next = 6;
+                  break;
+                }
+
+                throw new Error('failed to get confirmed transaction: ' + error.message);
+
+              case 6:
+                assert__default['default'](typeof result !== 'undefined');
+
+                if (!(result === null)) {
+                  _context40.next = 9;
+                  break;
+                }
+
+                return _context40.abrupt("return", result);
+
+              case 9:
+                _result$transaction$m = result.transaction.message, accountKeys = _result$transaction$m.accountKeys, instructions = _result$transaction$m.instructions, recentBlockhash = _result$transaction$m.recentBlockhash;
+                return _context40.abrupt("return", {
                   slot: result.slot,
                   meta: result.meta,
                   transaction: {
@@ -4228,13 +4382,13 @@ var Connection = /*#__PURE__*/function () {
 
               case 11:
               case "end":
-                return _context39.stop();
+                return _context40.stop();
             }
           }
-        }, _callee39, this);
+        }, _callee40, this);
       }));
 
-      function getParsedConfirmedTransaction(_x53) {
+      function getParsedConfirmedTransaction(_x56) {
         return _getParsedConfirmedTransaction.apply(this, arguments);
       }
 
@@ -4252,68 +4406,18 @@ var Connection = /*#__PURE__*/function () {
   }, {
     key: "getConfirmedSignaturesForAddress",
     value: function () {
-      var _getConfirmedSignaturesForAddress = _asyncToGenerator__default['default']( /*#__PURE__*/_regeneratorRuntime__default['default'].mark(function _callee40(address, startSlot, endSlot) {
-        var unsafeRes, result;
-        return _regeneratorRuntime__default['default'].wrap(function _callee40$(_context40) {
-          while (1) {
-            switch (_context40.prev = _context40.next) {
-              case 0:
-                _context40.next = 2;
-                return this._rpcRequest('getConfirmedSignaturesForAddress', [address.toBase58(), startSlot, endSlot]);
-
-              case 2:
-                unsafeRes = _context40.sent;
-                result = GetConfirmedSignaturesForAddressRpcResult(unsafeRes);
-
-                if (!result.error) {
-                  _context40.next = 6;
-                  break;
-                }
-
-                throw new Error('failed to get confirmed signatures for address: ' + result.error.message);
-
-              case 6:
-                assert__default['default'](typeof result.result !== 'undefined');
-                return _context40.abrupt("return", result.result);
-
-              case 8:
-              case "end":
-                return _context40.stop();
-            }
-          }
-        }, _callee40, this);
-      }));
-
-      function getConfirmedSignaturesForAddress(_x54, _x55, _x56) {
-        return _getConfirmedSignaturesForAddress.apply(this, arguments);
-      }
-
-      return getConfirmedSignaturesForAddress;
-    }()
-    /**
-     * Returns confirmed signatures for transactions involving an
-     * address backwards in time from the provided signature or most recent confirmed block
-     *
-     *
-     * @param address queried address
-     * @param options
-     */
-
-  }, {
-    key: "getConfirmedSignaturesForAddress2",
-    value: function () {
-      var _getConfirmedSignaturesForAddress2 = _asyncToGenerator__default['default']( /*#__PURE__*/_regeneratorRuntime__default['default'].mark(function _callee41(address, options) {
+      var _getConfirmedSignaturesForAddress = _asyncToGenerator__default['default']( /*#__PURE__*/_regeneratorRuntime__default['default'].mark(function _callee41(address, startSlot, endSlot) {
         var unsafeRes, result;
         return _regeneratorRuntime__default['default'].wrap(function _callee41$(_context41) {
           while (1) {
             switch (_context41.prev = _context41.next) {
               case 0:
                 _context41.next = 2;
-                return this._rpcRequest('getConfirmedSignaturesForAddress2', [address.toBase58(), options]);
+                return this._rpcRequest('getConfirmedSignaturesForAddress', [address.toBase58(), startSlot, endSlot]);
 
               case 2:
                 unsafeRes = _context41.sent;
-                result = GetConfirmedSignaturesForAddress2RpcResult(unsafeRes);
+                result = GetConfirmedSignaturesForAddressRpcResult(unsafeRes);
 
                 if (!result.error) {
                   _context41.next = 6;
@@ -4334,7 +4438,57 @@ var Connection = /*#__PURE__*/function () {
         }, _callee41, this);
       }));
 
-      function getConfirmedSignaturesForAddress2(_x57, _x58) {
+      function getConfirmedSignaturesForAddress(_x57, _x58, _x59) {
+        return _getConfirmedSignaturesForAddress.apply(this, arguments);
+      }
+
+      return getConfirmedSignaturesForAddress;
+    }()
+    /**
+     * Returns confirmed signatures for transactions involving an
+     * address backwards in time from the provided signature or most recent confirmed block
+     *
+     *
+     * @param address queried address
+     * @param options
+     */
+
+  }, {
+    key: "getConfirmedSignaturesForAddress2",
+    value: function () {
+      var _getConfirmedSignaturesForAddress2 = _asyncToGenerator__default['default']( /*#__PURE__*/_regeneratorRuntime__default['default'].mark(function _callee42(address, options) {
+        var unsafeRes, result;
+        return _regeneratorRuntime__default['default'].wrap(function _callee42$(_context42) {
+          while (1) {
+            switch (_context42.prev = _context42.next) {
+              case 0:
+                _context42.next = 2;
+                return this._rpcRequest('getConfirmedSignaturesForAddress2', [address.toBase58(), options]);
+
+              case 2:
+                unsafeRes = _context42.sent;
+                result = GetConfirmedSignaturesForAddress2RpcResult(unsafeRes);
+
+                if (!result.error) {
+                  _context42.next = 6;
+                  break;
+                }
+
+                throw new Error('failed to get confirmed signatures for address: ' + result.error.message);
+
+              case 6:
+                assert__default['default'](typeof result.result !== 'undefined');
+                return _context42.abrupt("return", result.result);
+
+              case 8:
+              case "end":
+                return _context42.stop();
+            }
+          }
+        }, _callee42, this);
+      }));
+
+      function getConfirmedSignaturesForAddress2(_x60, _x61) {
         return _getConfirmedSignaturesForAddress2.apply(this, arguments);
       }
 
@@ -4347,18 +4501,18 @@ var Connection = /*#__PURE__*/function () {
   }, {
     key: "getNonceAndContext",
     value: function () {
-      var _getNonceAndContext = _asyncToGenerator__default['default']( /*#__PURE__*/_regeneratorRuntime__default['default'].mark(function _callee42(nonceAccount, commitment) {
+      var _getNonceAndContext = _asyncToGenerator__default['default']( /*#__PURE__*/_regeneratorRuntime__default['default'].mark(function _callee43(nonceAccount, commitment) {
         var _yield$this$getAccoun, context, accountInfo, value;
 
-        return _regeneratorRuntime__default['default'].wrap(function _callee42$(_context42) {
+        return _regeneratorRuntime__default['default'].wrap(function _callee43$(_context43) {
           while (1) {
-            switch (_context42.prev = _context42.next) {
+            switch (_context43.prev = _context43.next) {
               case 0:
-                _context42.next = 2;
+                _context43.next = 2;
                 return this.getAccountInfoAndContext(nonceAccount, commitment);
 
               case 2:
-                _yield$this$getAccoun = _context42.sent;
+                _yield$this$getAccoun = _context43.sent;
                 context = _yield$this$getAccoun.context;
                 accountInfo = _yield$this$getAccoun.value;
                 value = null;
@@ -4367,20 +4521,20 @@ var Connection = /*#__PURE__*/function () {
                   value = NonceAccount.fromAccountData(accountInfo.data);
                 }
 
-                return _context42.abrupt("return", {
+                return _context43.abrupt("return", {
                   context: context,
                   value: value
                 });
 
               case 8:
               case "end":
-                return _context42.stop();
+                return _context43.stop();
             }
           }
-        }, _callee42, this);
+        }, _callee43, this);
       }));
 
-      function getNonceAndContext(_x59, _x60) {
+      function getNonceAndContext(_x62, _x63) {
         return _getNonceAndContext.apply(this, arguments);
       }
 
@@ -4393,12 +4547,12 @@ var Connection = /*#__PURE__*/function () {
   }, {
     key: "getNonce",
     value: function () {
-      var _getNonce = _asyncToGenerator__default['default']( /*#__PURE__*/_regeneratorRuntime__default['default'].mark(function _callee43(nonceAccount, commitment) {
-        return _regeneratorRuntime__default['default'].wrap(function _callee43$(_context43) {
+      var _getNonce = _asyncToGenerator__default['default']( /*#__PURE__*/_regeneratorRuntime__default['default'].mark(function _callee44(nonceAccount, commitment) {
+        return _regeneratorRuntime__default['default'].wrap(function _callee44$(_context44) {
           while (1) {
-            switch (_context43.prev = _context43.next) {
+            switch (_context44.prev = _context44.next) {
               case 0:
-                _context43.next = 2;
+                _context44.next = 2;
                 return this.getNonceAndContext(nonceAccount, commitment).then(function (x) {
                   return x.value;
                 })["catch"](function (e) {
@@ -4406,17 +4560,17 @@ var Connection = /*#__PURE__*/function () {
                 });
 
               case 2:
-                return _context43.abrupt("return", _context43.sent);
+                return _context44.abrupt("return", _context44.sent);
 
               case 3:
               case "end":
-                return _context43.stop();
+                return _context44.stop();
             }
           }
-        }, _callee43, this);
+        }, _callee44, this);
       }));
 
-      function getNonce(_x61, _x62) {
+      function getNonce(_x64, _x65) {
         return _getNonce.apply(this, arguments);
       }
 
@@ -4429,21 +4583,21 @@ var Connection = /*#__PURE__*/function () {
   }, {
     key: "requestAirdrop",
     value: function () {
-      var _requestAirdrop = _asyncToGenerator__default['default']( /*#__PURE__*/_regeneratorRuntime__default['default'].mark(function _callee44(to, amount) {
+      var _requestAirdrop = _asyncToGenerator__default['default']( /*#__PURE__*/_regeneratorRuntime__default['default'].mark(function _callee45(to, amount) {
         var unsafeRes, res;
-        return _regeneratorRuntime__default['default'].wrap(function _callee44$(_context44) {
+        return _regeneratorRuntime__default['default'].wrap(function _callee45$(_context45) {
           while (1) {
-            switch (_context44.prev = _context44.next) {
+            switch (_context45.prev = _context45.next) {
               case 0:
-                _context44.next = 2;
+                _context45.next = 2;
                 return this._rpcRequest('requestAirdrop', [to.toBase58(), amount]);
 
               case 2:
-                unsafeRes = _context44.sent;
+                unsafeRes = _context45.sent;
                 res = RequestAirdropRpcResult(unsafeRes);
 
                 if (!res.error) {
-                  _context44.next = 6;
+                  _context45.next = 6;
                   break;
                 }
 
@@ -4451,17 +4605,17 @@ var Connection = /*#__PURE__*/function () {
 
               case 6:
                 assert__default['default'](typeof res.result !== 'undefined');
-                return _context44.abrupt("return", res.result);
+                return _context45.abrupt("return", res.result);
 
               case 8:
               case "end":
-                return _context44.stop();
+                return _context45.stop();
             }
           }
-        }, _callee44, this);
+        }, _callee45, this);
       }));
 
-      function requestAirdrop(_x63, _x64) {
+      function requestAirdrop(_x66, _x67) {
         return _requestAirdrop.apply(this, arguments);
       }
 
@@ -4470,28 +4624,28 @@ var Connection = /*#__PURE__*/function () {
   }, {
     key: "_recentBlockhash",
     value: function () {
-      var _recentBlockhash2 = _asyncToGenerator__default['default']( /*#__PURE__*/_regeneratorRuntime__default['default'].mark(function _callee45(disableCache) {
+      var _recentBlockhash2 = _asyncToGenerator__default['default']( /*#__PURE__*/_regeneratorRuntime__default['default'].mark(function _callee46(disableCache) {
         var expired;
-        return _regeneratorRuntime__default['default'].wrap(function _callee45$(_context45) {
+        return _regeneratorRuntime__default['default'].wrap(function _callee46$(_context46) {
           while (1) {
-            switch (_context45.prev = _context45.next) {
+            switch (_context46.prev = _context46.next) {
               case 0:
                 if (disableCache) {
-                  _context45.next = 9;
+                  _context46.next = 9;
                   break;
                 }
 
               case 1:
                 if (!this._pollingBlockhash) {
-                  _context45.next = 6;
+                  _context46.next = 6;
                   break;
                 }
 
-                _context45.next = 4;
+                _context46.next = 4;
                 return sleep(100);
 
               case 4:
-                _context45.next = 1;
+                _context46.next = 1;
                 break;
 
               case 6:
@@ -4499,28 +4653,28 @@ var Connection = /*#__PURE__*/function () {
                 expired = Date.now() - this._blockhashInfo.lastFetch >= BLOCKHASH_CACHE_TIMEOUT_MS;
 
                 if (!(this._blockhashInfo.recentBlockhash !== null && !expired)) {
-                  _context45.next = 9;
+                  _context46.next = 9;
                   break;
                 }
 
-                return _context45.abrupt("return", this._blockhashInfo.recentBlockhash);
+                return _context46.abrupt("return", this._blockhashInfo.recentBlockhash);
 
               case 9:
-                _context45.next = 11;
+                _context46.next = 11;
                 return this._pollNewBlockhash();
 
               case 11:
-                return _context45.abrupt("return", _context45.sent);
+                return _context46.abrupt("return", _context46.sent);
 
               case 12:
               case "end":
-                return _context45.stop();
+                return _context46.stop();
             }
           }
-        }, _callee45, this);
+        }, _callee46, this);
       }));
 
-      function _recentBlockhash(_x65) {
+      function _recentBlockhash(_x68) {
         return _recentBlockhash2.apply(this, arguments);
       }
 
@@ -4529,33 +4683,33 @@ var Connection = /*#__PURE__*/function () {
   }, {
     key: "_pollNewBlockhash",
     value: function () {
-      var _pollNewBlockhash2 = _asyncToGenerator__default['default']( /*#__PURE__*/_regeneratorRuntime__default['default'].mark(function _callee46() {
+      var _pollNewBlockhash2 = _asyncToGenerator__default['default']( /*#__PURE__*/_regeneratorRuntime__default['default'].mark(function _callee47() {
         var startTime, i, _yield$this$getRecent, blockhash;
 
-        return _regeneratorRuntime__default['default'].wrap(function _callee46$(_context46) {
+        return _regeneratorRuntime__default['default'].wrap(function _callee47$(_context47) {
           while (1) {
-            switch (_context46.prev = _context46.next) {
+            switch (_context47.prev = _context47.next) {
               case 0:
                 this._pollingBlockhash = true;
-                _context46.prev = 1;
+                _context47.prev = 1;
                 startTime = Date.now();
                 i = 0;
 
               case 4:
                 if (!(i < 50)) {
-                  _context46.next = 17;
+                  _context47.next = 17;
                   break;
                 }
 
-                _context46.next = 7;
+                _context47.next = 7;
                 return this.getRecentBlockhash('max');
 
               case 7:
-                _yield$this$getRecent = _context46.sent;
+                _yield$this$getRecent = _context47.sent;
                 blockhash = _yield$this$getRecent.blockhash;
 
                 if (!(this._blockhashInfo.recentBlockhash != blockhash)) {
-                  _context46.next = 12;
+                  _context47.next = 12;
                   break;
                 }
 
@@ -4565,31 +4719,31 @@ var Connection = /*#__PURE__*/function () {
                   transactionSignatures: [],
                   simulatedSignatures: []
                 };
-                return _context46.abrupt("return", blockhash);
+                return _context47.abrupt("return", blockhash);
 
               case 12:
-                _context46.next = 14;
+                _context47.next = 14;
                 return sleep(MS_PER_SLOT / 2);
 
               case 14:
                 i++;
-                _context46.next = 4;
+                _context47.next = 4;
                 break;
 
               case 17:
                 throw new Error("Unable to obtain a new blockhash after ".concat(Date.now() - startTime, "ms"));
 
               case 18:
-                _context46.prev = 18;
+                _context47.prev = 18;
                 this._pollingBlockhash = false;
-                return _context46.finish(18);
+                return _context47.finish(18);
 
               case 21:
               case "end":
-                return _context46.stop();
+                return _context47.stop();
             }
           }
-        }, _callee46, this, [[1,, 18, 21]]);
+        }, _callee47, this, [[1,, 18, 21]]);
       }));
 
       function _pollNewBlockhash() {
@@ -4605,43 +4759,43 @@ var Connection = /*#__PURE__*/function () {
   }, {
     key: "simulateTransaction",
     value: function () {
-      var _simulateTransaction = _asyncToGenerator__default['default']( /*#__PURE__*/_regeneratorRuntime__default['default'].mark(function _callee47(transaction, signers) {
+      var _simulateTransaction = _asyncToGenerator__default['default']( /*#__PURE__*/_regeneratorRuntime__default['default'].mark(function _callee48(transaction, signers) {
         var disableCache, signature, signData, wireTransaction, encodedTransaction, args, unsafeRes, res;
-        return _regeneratorRuntime__default['default'].wrap(function _callee47$(_context47) {
+        return _regeneratorRuntime__default['default'].wrap(function _callee48$(_context48) {
           while (1) {
-            switch (_context47.prev = _context47.next) {
+            switch (_context48.prev = _context48.next) {
               case 0:
                 if (!(transaction.nonceInfo && signers)) {
-                  _context47.next = 4;
+                  _context48.next = 4;
                   break;
                 }
 
                 transaction.sign.apply(transaction, _toConsumableArray__default['default'](signers));
-                _context47.next = 22;
+                _context48.next = 22;
                 break;
 
               case 4:
                 disableCache = this._disableBlockhashCaching;
 
               case 5:
-                _context47.next = 7;
+                _context48.next = 7;
                 return this._recentBlockhash(disableCache);
 
               case 7:
-                transaction.recentBlockhash = _context47.sent;
+                transaction.recentBlockhash = _context48.sent;
 
                 if (signers) {
-                  _context47.next = 10;
+                  _context48.next = 10;
                   break;
                 }
 
-                return _context47.abrupt("break", 22);
+                return _context48.abrupt("break", 22);
 
               case 10:
                 transaction.sign.apply(transaction, _toConsumableArray__default['default'](signers));
 
                 if (transaction.signature) {
-                  _context47.next = 13;
+                  _context48.next = 13;
                   break;
                 }
 
@@ -4653,19 +4807,19 @@ var Connection = /*#__PURE__*/function () {
                 signature = transaction.signature.toString('base64');
 
                 if (!(!this._blockhashInfo.simulatedSignatures.includes(signature) && !this._blockhashInfo.transactionSignatures.includes(signature))) {
-                  _context47.next = 19;
+                  _context48.next = 19;
                   break;
                 }
 
                 this._blockhashInfo.simulatedSignatures.push(signature);
 
-                return _context47.abrupt("break", 22);
+                return _context48.abrupt("break", 22);
 
               case 19:
                 disableCache = true;
 
               case 20:
-                _context47.next = 5;
+                _context48.next = 5;
                 break;
 
               case 22:
@@ -4680,15 +4834,15 @@ var Connection = /*#__PURE__*/function () {
                   });
                 }
 
-                _context47.next = 29;
+                _context48.next = 29;
                 return this._rpcRequest('simulateTransaction', args);
 
               case 29:
-                unsafeRes = _context47.sent;
+                unsafeRes = _context48.sent;
                 res = SimulatedTransactionResponseValidator(unsafeRes);
 
                 if (!res.error) {
-                  _context47.next = 33;
+                  _context48.next = 33;
                   break;
                 }
 
@@ -4697,17 +4851,17 @@ var Connection = /*#__PURE__*/function () {
               case 33:
                 assert__default['default'](typeof res.result !== 'undefined');
                 assert__default['default'](res.result);
-                return _context47.abrupt("return", res.result);
+                return _context48.abrupt("return", res.result);
 
               case 36:
               case "end":
-                return _context47.stop();
+                return _context48.stop();
             }
           }
-        }, _callee47, this);
+        }, _callee48, this);
       }));
 
-      function simulateTransaction(_x66, _x67) {
+      function simulateTransaction(_x69, _x70) {
         return _simulateTransaction.apply(this, arguments);
       }
 
@@ -4720,34 +4874,34 @@ var Connection = /*#__PURE__*/function () {
   }, {
     key: "sendTransaction",
     value: function () {
-      var _sendTransaction = _asyncToGenerator__default['default']( /*#__PURE__*/_regeneratorRuntime__default['default'].mark(function _callee48(transaction, signers, options) {
+      var _sendTransaction = _asyncToGenerator__default['default']( /*#__PURE__*/_regeneratorRuntime__default['default'].mark(function _callee49(transaction, signers, options) {
         var disableCache, signature, wireTransaction;
-        return _regeneratorRuntime__default['default'].wrap(function _callee48$(_context48) {
+        return _regeneratorRuntime__default['default'].wrap(function _callee49$(_context49) {
           while (1) {
-            switch (_context48.prev = _context48.next) {
+            switch (_context49.prev = _context49.next) {
               case 0:
                 if (!transaction.nonceInfo) {
-                  _context48.next = 4;
+                  _context49.next = 4;
                   break;
                 }
 
                 transaction.sign.apply(transaction, _toConsumableArray__default['default'](signers));
-                _context48.next = 20;
+                _context49.next = 20;
                 break;
 
               case 4:
                 disableCache = this._disableBlockhashCaching;
 
               case 5:
-                _context48.next = 7;
+                _context49.next = 7;
                 return this._recentBlockhash(disableCache);
 
               case 7:
-                transaction.recentBlockhash = _context48.sent;
+                transaction.recentBlockhash = _context49.sent;
                 transaction.sign.apply(transaction, _toConsumableArray__default['default'](signers));
 
                 if (transaction.signature) {
-                  _context48.next = 11;
+                  _context49.next = 11;
                   break;
                 }
 
@@ -4759,38 +4913,38 @@ var Connection = /*#__PURE__*/function () {
                 signature = transaction.signature.toString('base64');
 
                 if (this._blockhashInfo.transactionSignatures.includes(signature)) {
-                  _context48.next = 17;
+                  _context49.next = 17;
                   break;
                 }
 
                 this._blockhashInfo.transactionSignatures.push(signature);
 
-                return _context48.abrupt("break", 20);
+                return _context49.abrupt("break", 20);
 
               case 17:
                 disableCache = true;
 
               case 18:
-                _context48.next = 5;
+                _context49.next = 5;
                 break;
 
               case 20:
                 wireTransaction = transaction.serialize();
-                _context48.next = 23;
+                _context49.next = 23;
                 return this.sendRawTransaction(wireTransaction, options);
 
               case 23:
-                return _context48.abrupt("return", _context48.sent);
+                return _context49.abrupt("return", _context49.sent);
 
               case 24:
               case "end":
-                return _context48.stop();
+                return _context49.stop();
             }
           }
-        }, _callee48, this);
+        }, _callee49, this);
       }));
 
-      function sendTransaction(_x68, _x69, _x70) {
+      function sendTransaction(_x71, _x72, _x73) {
         return _sendTransaction.apply(this, arguments);
       }
 
@@ -4803,21 +4957,21 @@ var Connection = /*#__PURE__*/function () {
   }, {
     key: "validatorExit",
     value: function () {
-      var _validatorExit = _asyncToGenerator__default['default']( /*#__PURE__*/_regeneratorRuntime__default['default'].mark(function _callee49() {
+      var _validatorExit = _asyncToGenerator__default['default']( /*#__PURE__*/_regeneratorRuntime__default['default'].mark(function _callee50() {
         var unsafeRes, res;
-        return _regeneratorRuntime__default['default'].wrap(function _callee49$(_context49) {
+        return _regeneratorRuntime__default['default'].wrap(function _callee50$(_context50) {
           while (1) {
-            switch (_context49.prev = _context49.next) {
+            switch (_context50.prev = _context50.next) {
               case 0:
-                _context49.next = 2;
+                _context50.next = 2;
                 return this._rpcRequest('validatorExit', []);
 
               case 2:
-                unsafeRes = _context49.sent;
+                unsafeRes = _context50.sent;
                 res = jsonRpcResult('boolean')(unsafeRes);
 
                 if (!res.error) {
-                  _context49.next = 6;
+                  _context50.next = 6;
                   break;
                 }
 
@@ -4825,14 +4979,14 @@ var Connection = /*#__PURE__*/function () {
 
               case 6:
                 assert__default['default'](typeof res.result !== 'undefined');
-                return _context49.abrupt("return", res.result);
+                return _context50.abrupt("return", res.result);
 
               case 8:
               case "end":
-                return _context49.stop();
+                return _context50.stop();
             }
           }
-        }, _callee49, this);
+        }, _callee50, this);
       }));
 
       function validatorExit() {
@@ -4849,29 +5003,29 @@ var Connection = /*#__PURE__*/function () {
   }, {
     key: "sendRawTransaction",
     value: function () {
-      var _sendRawTransaction = _asyncToGenerator__default['default']( /*#__PURE__*/_regeneratorRuntime__default['default'].mark(function _callee50(rawTransaction, options) {
+      var _sendRawTransaction = _asyncToGenerator__default['default']( /*#__PURE__*/_regeneratorRuntime__default['default'].mark(function _callee51(rawTransaction, options) {
         var encodedTransaction, result;
-        return _regeneratorRuntime__default['default'].wrap(function _callee50$(_context50) {
+        return _regeneratorRuntime__default['default'].wrap(function _callee51$(_context51) {
           while (1) {
-            switch (_context50.prev = _context50.next) {
+            switch (_context51.prev = _context51.next) {
               case 0:
                 encodedTransaction = bs58__default['default'].encode(toBuffer(rawTransaction));
-                _context50.next = 3;
+                _context51.next = 3;
                 return this.sendEncodedTransaction(encodedTransaction, options);
 
               case 3:
-                result = _context50.sent;
-                return _context50.abrupt("return", result);
+                result = _context51.sent;
+                return _context51.abrupt("return", result);
 
               case 5:
               case "end":
-                return _context50.stop();
+                return _context51.stop();
             }
           }
-        }, _callee50, this);
+        }, _callee51, this);
       }));
 
-      function sendRawTransaction(_x71, _x72) {
+      function sendRawTransaction(_x74, _x75) {
         return _sendRawTransaction.apply(this, arguments);
       }
 
@@ -4885,45 +5039,62 @@ var Connection = /*#__PURE__*/function () {
   }, {
     key: "sendEncodedTransaction",
     value: function () {
-      var _sendEncodedTransaction = _asyncToGenerator__default['default']( /*#__PURE__*/_regeneratorRuntime__default['default'].mark(function _callee51(encodedTransaction, options) {
-        var args, skipPreflight, unsafeRes, res;
-        return _regeneratorRuntime__default['default'].wrap(function _callee51$(_context51) {
+      var _sendEncodedTransaction = _asyncToGenerator__default['default']( /*#__PURE__*/_regeneratorRuntime__default['default'].mark(function _callee52(encodedTransaction, options) {
+        var args, skipPreflight, preflightCommitment, unsafeRes, res;
+        return _regeneratorRuntime__default['default'].wrap(function _callee52$(_context52) {
           while (1) {
-            switch (_context51.prev = _context51.next) {
+            switch (_context52.prev = _context52.next) {
               case 0:
                 args = [encodedTransaction];
                 skipPreflight = options && options.skipPreflight;
-                if (skipPreflight) args.push({
-                  skipPreflight: skipPreflight
-                });
-                _context51.next = 5;
-                return this._rpcRequest('sendTransaction', args);
+                preflightCommitment = options && options.preflightCommitment;
+
+                if (!(skipPreflight && preflightCommitment)) {
+                  _context52.next = 5;
+                  break;
+                }
+
+                throw new Error('cannot set preflightCommitment when skipPreflight is enabled');
 
               case 5:
-                unsafeRes = _context51.sent;
+                if (skipPreflight) {
+                  args.push({
+                    skipPreflight: skipPreflight
+                  });
+                } else if (preflightCommitment) {
+                  args.push({
+                    preflightCommitment: preflightCommitment
+                  });
+                }
+
+                _context52.next = 8;
+                return this._rpcRequest('sendTransaction', args);
+
+              case 8:
+                unsafeRes = _context52.sent;
                 res = SendTransactionRpcResult(unsafeRes);
 
                 if (!res.error) {
-                  _context51.next = 9;
+                  _context52.next = 12;
                   break;
                 }
 
                 throw new Error('failed to send transaction: ' + res.error.message);
 
-              case 9:
+              case 12:
                 assert__default['default'](typeof res.result !== 'undefined');
                 assert__default['default'](res.result);
-                return _context51.abrupt("return", res.result);
+                return _context52.abrupt("return", res.result);
 
-              case 12:
+              case 15:
               case "end":
-                return _context51.stop();
+                return _context52.stop();
             }
           }
-        }, _callee51, this);
+        }, _callee52, this);
       }));
 
-      function sendEncodedTransaction(_x73, _x74) {
+      function sendEncodedTransaction(_x76, _x77) {
         return _sendEncodedTransaction.apply(this, arguments);
       }
 
@@ -4982,53 +5153,53 @@ var Connection = /*#__PURE__*/function () {
   }, {
     key: "_subscribe",
     value: function () {
-      var _subscribe2 = _asyncToGenerator__default['default']( /*#__PURE__*/_regeneratorRuntime__default['default'].mark(function _callee52(sub, rpcMethod, rpcArgs) {
+      var _subscribe2 = _asyncToGenerator__default['default']( /*#__PURE__*/_regeneratorRuntime__default['default'].mark(function _callee53(sub, rpcMethod, rpcArgs) {
         var id;
-        return _regeneratorRuntime__default['default'].wrap(function _callee52$(_context52) {
+        return _regeneratorRuntime__default['default'].wrap(function _callee53$(_context53) {
           while (1) {
-            switch (_context52.prev = _context52.next) {
+            switch (_context53.prev = _context53.next) {
               case 0:
                 if (!(sub.subscriptionId == null)) {
-                  _context52.next = 13;
+                  _context53.next = 13;
                   break;
                 }
 
                 sub.subscriptionId = 'subscribing';
-                _context52.prev = 2;
-                _context52.next = 5;
+                _context53.prev = 2;
+                _context53.next = 5;
                 return this._rpcWebSocket.call(rpcMethod, rpcArgs);
 
               case 5:
-                id = _context52.sent;
+                id = _context53.sent;
 
                 if (sub.subscriptionId === 'subscribing') {
                   // eslint-disable-next-line require-atomic-updates
                   sub.subscriptionId = id;
                 }
 
-                _context52.next = 13;
+                _context53.next = 13;
                 break;
 
               case 9:
-                _context52.prev = 9;
-                _context52.t0 = _context52["catch"](2);
+                _context53.prev = 9;
+                _context53.t0 = _context53["catch"](2);
 
                 if (sub.subscriptionId === 'subscribing') {
                   // eslint-disable-next-line require-atomic-updates
                   sub.subscriptionId = null;
                 }
 
-                console.error("".concat(rpcMethod, " error for argument"), rpcArgs, _context52.t0.message);
+                console.error("".concat(rpcMethod, " error for argument"), rpcArgs, _context53.t0.message);
 
               case 13:
               case "end":
-                return _context52.stop();
+                return _context53.stop();
             }
           }
-        }, _callee52, this, [[2, 9]]);
+        }, _callee53, this, [[2, 9]]);
       }));
 
-      function _subscribe(_x75, _x76, _x77) {
+      function _subscribe(_x78, _x79, _x80) {
         return _subscribe2.apply(this, arguments);
       }
 
@@ -5041,42 +5212,42 @@ var Connection = /*#__PURE__*/function () {
   }, {
     key: "_unsubscribe",
     value: function () {
-      var _unsubscribe2 = _asyncToGenerator__default['default']( /*#__PURE__*/_regeneratorRuntime__default['default'].mark(function _callee53(sub, rpcMethod) {
+      var _unsubscribe2 = _asyncToGenerator__default['default']( /*#__PURE__*/_regeneratorRuntime__default['default'].mark(function _callee54(sub, rpcMethod) {
         var subscriptionId, unsubscribeId;
-        return _regeneratorRuntime__default['default'].wrap(function _callee53$(_context53) {
+        return _regeneratorRuntime__default['default'].wrap(function _callee54$(_context54) {
           while (1) {
-            switch (_context53.prev = _context53.next) {
+            switch (_context54.prev = _context54.next) {
               case 0:
                 subscriptionId = sub.subscriptionId;
 
                 if (!(subscriptionId != null && typeof subscriptionId != 'string')) {
-                  _context53.next = 11;
+                  _context54.next = 11;
                   break;
                 }
 
                 unsubscribeId = subscriptionId;
-                _context53.prev = 3;
-                _context53.next = 6;
+                _context54.prev = 3;
+                _context54.next = 6;
                 return this._rpcWebSocket.call(rpcMethod, [unsubscribeId]);
 
               case 6:
-                _context53.next = 11;
+                _context54.next = 11;
                 break;
 
               case 8:
-                _context53.prev = 8;
-                _context53.t0 = _context53["catch"](3);
-                console.error("".concat(rpcMethod, " error:"), _context53.t0.message);
+                _context54.prev = 8;
+                _context54.t0 = _context54["catch"](3);
+                console.error("".concat(rpcMethod, " error:"), _context54.t0.message);
 
               case 11:
               case "end":
-                return _context53.stop();
+                return _context54.stop();
             }
           }
-        }, _callee53, this, [[3, 8]]);
+        }, _callee54, this, [[3, 8]]);
       }));
 
-      function _unsubscribe(_x78, _x79) {
+      function _unsubscribe(_x81, _x82) {
         return _unsubscribe2.apply(this, arguments);
       }
 
@@ -5252,14 +5423,14 @@ var Connection = /*#__PURE__*/function () {
           if (sub.subscriptionId === res.subscription) {
             var result = res.result;
             var value = result.value,
-                _context54 = result.context;
+                _context55 = result.context;
             assert__default['default'](value.data[1] === 'base64');
             sub.callback({
               executable: value.executable,
               owner: new PublicKey(value.owner),
               lamports: value.lamports,
               data: Buffer.from(value.data[0], 'base64')
-            }, _context54);
+            }, _context55);
             return true;
           }
         }
@@ -5302,26 +5473,26 @@ var Connection = /*#__PURE__*/function () {
   }, {
     key: "removeAccountChangeListener",
     value: function () {
-      var _removeAccountChangeListener = _asyncToGenerator__default['default']( /*#__PURE__*/_regeneratorRuntime__default['default'].mark(function _callee54(id) {
+      var _removeAccountChangeListener = _asyncToGenerator__default['default']( /*#__PURE__*/_regeneratorRuntime__default['default'].mark(function _callee55(id) {
         var subInfo;
-        return _regeneratorRuntime__default['default'].wrap(function _callee54$(_context55) {
+        return _regeneratorRuntime__default['default'].wrap(function _callee55$(_context56) {
           while (1) {
-            switch (_context55.prev = _context55.next) {
+            switch (_context56.prev = _context56.next) {
               case 0:
                 if (!this._accountChangeSubscriptions[id]) {
-                  _context55.next = 8;
+                  _context56.next = 8;
                   break;
                 }
 
                 subInfo = this._accountChangeSubscriptions[id];
                 delete this._accountChangeSubscriptions[id];
-                _context55.next = 5;
+                _context56.next = 5;
                 return this._unsubscribe(subInfo, 'accountUnsubscribe');
 
               case 5:
                 this._updateSubscriptions();
 
-                _context55.next = 9;
+                _context56.next = 9;
                 break;
 
               case 8:
@@ -5329,13 +5500,13 @@ var Connection = /*#__PURE__*/function () {
 
               case 9:
               case "end":
-                return _context55.stop();
+                return _context56.stop();
             }
           }
-        }, _callee54, this);
+        }, _callee55, this);
       }));
 
-      function removeAccountChangeListener(_x80) {
+      function removeAccountChangeListener(_x83) {
         return _removeAccountChangeListener.apply(this, arguments);
       }
 
@@ -5368,7 +5539,7 @@ var Connection = /*#__PURE__*/function () {
           if (sub.subscriptionId === res.subscription) {
             var result = res.result;
             var value = result.value,
-                _context56 = result.context;
+                _context57 = result.context;
             assert__default['default'](value.account.data[1] === 'base64');
             sub.callback({
               accountId: value.pubkey,
@@ -5378,7 +5549,7 @@ var Connection = /*#__PURE__*/function () {
                 lamports: value.account.lamports,
                 data: Buffer.from(value.account.data[0], 'base64')
               }
-            }, _context56);
+            }, _context57);
             return true;
           }
         }
@@ -5422,26 +5593,26 @@ var Connection = /*#__PURE__*/function () {
   }, {
     key: "removeProgramAccountChangeListener",
     value: function () {
-      var _removeProgramAccountChangeListener = _asyncToGenerator__default['default']( /*#__PURE__*/_regeneratorRuntime__default['default'].mark(function _callee55(id) {
+      var _removeProgramAccountChangeListener = _asyncToGenerator__default['default']( /*#__PURE__*/_regeneratorRuntime__default['default'].mark(function _callee56(id) {
         var subInfo;
-        return _regeneratorRuntime__default['default'].wrap(function _callee55$(_context57) {
+        return _regeneratorRuntime__default['default'].wrap(function _callee56$(_context58) {
           while (1) {
-            switch (_context57.prev = _context57.next) {
+            switch (_context58.prev = _context58.next) {
               case 0:
                 if (!this._programAccountChangeSubscriptions[id]) {
-                  _context57.next = 8;
+                  _context58.next = 8;
                   break;
                 }
 
                 subInfo = this._programAccountChangeSubscriptions[id];
                 delete this._programAccountChangeSubscriptions[id];
-                _context57.next = 5;
+                _context58.next = 5;
                 return this._unsubscribe(subInfo, 'programUnsubscribe');
 
               case 5:
                 this._updateSubscriptions();
 
-                _context57.next = 9;
+                _context58.next = 9;
                 break;
 
               case 8:
@@ -5449,13 +5620,13 @@ var Connection = /*#__PURE__*/function () {
 
               case 9:
               case "end":
-                return _context57.stop();
+                return _context58.stop();
             }
           }
-        }, _callee55, this);
+        }, _callee56, this);
       }));
 
-      function removeProgramAccountChangeListener(_x81) {
+      function removeProgramAccountChangeListener(_x84) {
         return _removeProgramAccountChangeListener.apply(this, arguments);
       }
 
@@ -5475,10 +5646,10 @@ var Connection = /*#__PURE__*/function () {
       }
 
       assert__default['default'](typeof res.result !== 'undefined');
-      var _res$result2 = res.result,
-          parent = _res$result2.parent,
-          slot = _res$result2.slot,
-          root = _res$result2.root;
+      var _res$result3 = res.result,
+          parent = _res$result3.parent,
+          slot = _res$result3.slot,
+          root = _res$result3.root;
       var keys = Object.keys(this._slotSubscriptions).map(Number);
 
       var _iterator8 = _createForOfIteratorHelper$1(keys),
@@ -5533,26 +5704,26 @@ var Connection = /*#__PURE__*/function () {
   }, {
     key: "removeSlotChangeListener",
     value: function () {
-      var _removeSlotChangeListener = _asyncToGenerator__default['default']( /*#__PURE__*/_regeneratorRuntime__default['default'].mark(function _callee56(id) {
+      var _removeSlotChangeListener = _asyncToGenerator__default['default']( /*#__PURE__*/_regeneratorRuntime__default['default'].mark(function _callee57(id) {
         var subInfo;
-        return _regeneratorRuntime__default['default'].wrap(function _callee56$(_context58) {
+        return _regeneratorRuntime__default['default'].wrap(function _callee57$(_context59) {
           while (1) {
-            switch (_context58.prev = _context58.next) {
+            switch (_context59.prev = _context59.next) {
               case 0:
                 if (!this._slotSubscriptions[id]) {
-                  _context58.next = 8;
+                  _context59.next = 8;
                   break;
                 }
 
                 subInfo = this._slotSubscriptions[id];
                 delete this._slotSubscriptions[id];
-                _context58.next = 5;
+                _context59.next = 5;
                 return this._unsubscribe(subInfo, 'slotUnsubscribe');
 
               case 5:
                 this._updateSubscriptions();
 
-                _context58.next = 9;
+                _context59.next = 9;
                 break;
 
               case 8:
@@ -5560,13 +5731,13 @@ var Connection = /*#__PURE__*/function () {
 
               case 9:
               case "end":
-                return _context58.stop();
+                return _context59.stop();
             }
           }
-        }, _callee56, this);
+        }, _callee57, this);
       }));
 
-      function removeSlotChangeListener(_x82) {
+      function removeSlotChangeListener(_x85) {
         return _removeSlotChangeListener.apply(this, arguments);
       }
 
@@ -5574,10 +5745,10 @@ var Connection = /*#__PURE__*/function () {
     }()
   }, {
     key: "_buildArgs",
-    value: function _buildArgs(args, override, encoding) {
+    value: function _buildArgs(args, override, encoding, extra) {
       var commitment = override || this._commitment;
 
-      if (commitment || encoding) {
+      if (commitment || encoding || extra) {
         var options = {};
 
         if (encoding) {
@@ -5586,6 +5757,10 @@ var Connection = /*#__PURE__*/function () {
 
         if (commitment) {
           options.commitment = commitment;
+        }
+
+        if (extra) {
+          options = Object.assign(options, extra);
         }
 
         args.push(options);
@@ -5667,26 +5842,26 @@ var Connection = /*#__PURE__*/function () {
   }, {
     key: "removeSignatureListener",
     value: function () {
-      var _removeSignatureListener = _asyncToGenerator__default['default']( /*#__PURE__*/_regeneratorRuntime__default['default'].mark(function _callee57(id) {
+      var _removeSignatureListener = _asyncToGenerator__default['default']( /*#__PURE__*/_regeneratorRuntime__default['default'].mark(function _callee58(id) {
         var subInfo;
-        return _regeneratorRuntime__default['default'].wrap(function _callee57$(_context59) {
+        return _regeneratorRuntime__default['default'].wrap(function _callee58$(_context60) {
           while (1) {
-            switch (_context59.prev = _context59.next) {
+            switch (_context60.prev = _context60.next) {
               case 0:
                 if (!this._signatureSubscriptions[id]) {
-                  _context59.next = 8;
+                  _context60.next = 8;
                   break;
                 }
 
                 subInfo = this._signatureSubscriptions[id];
                 delete this._signatureSubscriptions[id];
-                _context59.next = 5;
+                _context60.next = 5;
                 return this._unsubscribe(subInfo, 'signatureUnsubscribe');
 
               case 5:
                 this._updateSubscriptions();
 
-                _context59.next = 9;
+                _context60.next = 9;
                 break;
 
               case 8:
@@ -5694,13 +5869,13 @@ var Connection = /*#__PURE__*/function () {
 
               case 9:
               case "end":
-                return _context59.stop();
+                return _context60.stop();
             }
           }
-        }, _callee57, this);
+        }, _callee58, this);
       }));
 
-      function removeSignatureListener(_x83) {
+      function removeSignatureListener(_x86) {
         return _removeSignatureListener.apply(this, arguments);
       }
 
@@ -5771,26 +5946,26 @@ var Connection = /*#__PURE__*/function () {
   }, {
     key: "removeRootChangeListener",
     value: function () {
-      var _removeRootChangeListener = _asyncToGenerator__default['default']( /*#__PURE__*/_regeneratorRuntime__default['default'].mark(function _callee58(id) {
+      var _removeRootChangeListener = _asyncToGenerator__default['default']( /*#__PURE__*/_regeneratorRuntime__default['default'].mark(function _callee59(id) {
         var subInfo;
-        return _regeneratorRuntime__default['default'].wrap(function _callee58$(_context60) {
+        return _regeneratorRuntime__default['default'].wrap(function _callee59$(_context61) {
           while (1) {
-            switch (_context60.prev = _context60.next) {
+            switch (_context61.prev = _context61.next) {
               case 0:
                 if (!this._rootSubscriptions[id]) {
-                  _context60.next = 8;
+                  _context61.next = 8;
                   break;
                 }
 
                 subInfo = this._rootSubscriptions[id];
                 delete this._rootSubscriptions[id];
-                _context60.next = 5;
+                _context61.next = 5;
                 return this._unsubscribe(subInfo, 'rootUnsubscribe');
 
               case 5:
                 this._updateSubscriptions();
 
-                _context60.next = 9;
+                _context61.next = 9;
                 break;
 
               case 8:
@@ -5798,13 +5973,13 @@ var Connection = /*#__PURE__*/function () {
 
               case 9:
               case "end":
-                return _context60.stop();
+                return _context61.stop();
             }
           }
-        }, _callee58, this);
+        }, _callee59, this);
       }));
 
-      function removeRootChangeListener(_x84) {
+      function removeRootChangeListener(_x87) {
         return _removeRootChangeListener.apply(this, arguments);
       }
 
@@ -6618,13 +6793,14 @@ var Loader = /*#__PURE__*/function () {
      * @param program Account to load the program into
      * @param programId Public key that identifies the loader
      * @param data Program octets
+     * @return true if program was loaded successfully, false if program was already loaded
      */
 
   }, {
     key: "load",
     value: function () {
       var _load = _asyncToGenerator__default['default']( /*#__PURE__*/_regeneratorRuntime__default['default'].mark(function _callee(connection, payer, program, programId, data) {
-        var balanceNeeded, transaction, dataLayout, chunkSize, offset, array, transactions, bytes, _data, _transaction, REQUESTS_PER_SECOND, _dataLayout, _data2, _transaction2;
+        var balanceNeeded, programInfo, transaction, dataLayout, chunkSize, offset, array, transactions, bytes, _data, _transaction, REQUESTS_PER_SECOND, _dataLayout, _data2, _transaction2;
 
         return _regeneratorRuntime__default['default'].wrap(function _callee$(_context) {
           while (1) {
@@ -6635,6 +6811,56 @@ var Loader = /*#__PURE__*/function () {
 
               case 2:
                 balanceNeeded = _context.sent;
+                _context.next = 5;
+                return connection.getAccountInfo(program.publicKey, 'single');
+
+              case 5:
+                programInfo = _context.sent;
+                transaction = null;
+
+                if (!(programInfo !== null)) {
+                  _context.next = 16;
+                  break;
+                }
+
+                if (!programInfo.executable) {
+                  _context.next = 11;
+                  break;
+                }
+
+                console.error('Program load failed, account is already executable');
+                return _context.abrupt("return", false);
+
+              case 11:
+                if (programInfo.data.length !== data.length) {
+                  transaction = transaction || new Transaction();
+                  transaction.add(SystemProgram.allocate({
+                    accountPubkey: program.publicKey,
+                    space: data.length
+                  }));
+                }
+
+                if (!programInfo.owner.equals(programId)) {
+                  transaction = transaction || new Transaction();
+                  transaction.add(SystemProgram.assign({
+                    accountPubkey: program.publicKey,
+                    programId: programId
+                  }));
+                }
+
+                if (programInfo.lamports < balanceNeeded) {
+                  transaction = transaction || new Transaction();
+                  transaction.add(SystemProgram.transfer({
+                    fromPubkey: payer.publicKey,
+                    toPubkey: program.publicKey,
+                    lamports: balanceNeeded - programInfo.lamports
+                  }));
+                }
+
+                _context.next = 17;
+                break;
+
+              case 16:
                 transaction = new Transaction().add(SystemProgram.createAccount({
                   fromPubkey: payer.publicKey,
                   newAccountPubkey: program.publicKey,
@@ -6642,22 +6868,29 @@ var Loader = /*#__PURE__*/function () {
                   space: data.length,
                   programId: programId
                 }));
-                _context.next = 6;
+
+              case 17:
+                if (!(transaction !== null)) {
+                  _context.next = 20;
+                  break;
+                }
+
+                _context.next = 20;
                 return sendAndConfirmTransaction(connection, transaction, [payer, program], {
                   commitment: 'single',
                   skipPreflight: true
                 });
 
-              case 6:
+              case 20:
                 dataLayout = BufferLayout.struct([BufferLayout.u32('instruction'), BufferLayout.u32('offset'), BufferLayout.u32('bytesLength'), BufferLayout.u32('bytesLengthPadding'), BufferLayout.seq(BufferLayout.u8('byte'), BufferLayout.offset(BufferLayout.u32(), -8), 'bytes')]);
                 chunkSize = Loader.chunkSize;
                 offset = 0;
                 array = data;
                 transactions = [];
 
-              case 11:
+              case 25:
                 if (!(array.length > 0)) {
-                  _context.next = 28;
+                  _context.next = 42;
                   break;
                 }
 
@@ -6684,32 +6917,32 @@ var Loader = /*#__PURE__*/function () {
                 })); // Delay between sends in an attempt to reduce rate limit errors
 
                 REQUESTS_PER_SECOND = 4;
-                _context.next = 20;
+                _context.next = 34;
                 return sleep(1000 / REQUESTS_PER_SECOND);
 
-              case 20:
+              case 34:
                 if (!(transactions.length === 8)) {
-                  _context.next = 24;
+                  _context.next = 38;
                   break;
                 }
 
-                _context.next = 23;
+                _context.next = 37;
                 return Promise.all(transactions);
 
-              case 23:
+              case 37:
                 transactions = [];
 
-              case 24:
+              case 38:
                 offset += chunkSize;
                 array = array.slice(chunkSize);
-                _context.next = 11;
+                _context.next = 25;
                 break;
 
-              case 28:
-                _context.next = 30;
+              case 42:
+                _context.next = 44;
                 return Promise.all(transactions);
 
-              case 30:
+              case 44:
                 _dataLayout = BufferLayout.struct([BufferLayout.u32('instruction')]);
                 _data2 = Buffer.alloc(_dataLayout.span);
 
@@ -6731,13 +6964,16 @@ var Loader = /*#__PURE__*/function () {
                   programId: programId,
                   data: _data2
                 });
-                _context.next = 36;
+                _context.next = 50;
                 return sendAndConfirmTransaction(connection, _transaction2, [payer, program], {
                   commitment: 'single',
                   skipPreflight: true
                 });
 
-              case 36:
+              case 50:
+                return _context.abrupt("return", true);
+
+              case 51:
               case "end":
                 return _context.stop();
             }
@@ -6800,6 +7036,7 @@ var BpfLoader = /*#__PURE__*/function () {
      * @param program Account to load the program into
      * @param elf The entire ELF containing the BPF program
      * @param loaderProgramId The program id of the BPF loader to use
+     * @return true if program was loaded successfully, false if program was already loaded
      */
 
   }, {
