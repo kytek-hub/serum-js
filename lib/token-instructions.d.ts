@@ -22,16 +22,6 @@ export function approve({ source, delegate, amount, owner }: {
     amount: any;
     owner: any;
 }): TransactionInstruction;
-export function revoke({ source, owner }: {
-    source: any;
-    owner: any;
-}): TransactionInstruction;
-export function setAuthority({ target, currentAuthority, newAuthority, authorityType, }: {
-    target: any;
-    currentAuthority: any;
-    newAuthority: any;
-    authorityType: any;
-}): TransactionInstruction;
 export function mintTo({ mint, destination, amount, mintAuthority }: {
     mint: any;
     destination: any;

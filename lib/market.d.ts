@@ -1,7 +1,7 @@
 /// <reference types="node" />
 import { Slab } from './slab';
 import BN from 'bn.js';
-import { Account, AccountInfo, Commitment, Connection, PublicKey, Transaction, TransactionInstruction } from '@solana/web3.js';
+import { Account, AccountInfo, Connection, PublicKey, Transaction, TransactionInstruction } from '@solana/web3.js';
 export declare const _MARKET_STAT_LAYOUT_V1: any;
 export declare const _MARKET_STATE_LAYOUT_V2: any;
 export declare class Market {
@@ -9,7 +9,7 @@ export declare class Market {
     private _baseSplTokenDecimals;
     private _quoteSplTokenDecimals;
     private _skipPreflight;
-    private _commitment;
+    private _confirmations;
     private _programId;
     private _openOrdersAccountsCache;
     private _feeDiscountKeysCache;
@@ -56,8 +56,7 @@ export declare class Market {
     }>;
     makePlaceOrderTransaction<T extends PublicKey | Account>(connection: Connection, { owner, payer, side, price, size, orderType, clientId, openOrdersAddressKey, feeDiscountPubkey, }: OrderParams<T>, cacheDurationMs?: number, feeDiscountPubkeyCacheDurationMs?: number): Promise<{
         transaction: Transaction;
-        signers: Account[];
-        payer: T;
+        signers: (Account | T)[];
     }>;
     makePlaceOrderInstruction<T extends PublicKey | Account>(connection: Connection, { owner, payer, side, price, size, orderType, clientId, openOrdersAddressKey, feeDiscountPubkey, }: OrderParams<T>): TransactionInstruction;
     private _sendTransaction;
@@ -69,8 +68,7 @@ export declare class Market {
     settleFunds(connection: Connection, owner: Account, openOrders: OpenOrders, baseWallet: PublicKey, quoteWallet: PublicKey, referrerQuoteWallet?: PublicKey | null): Promise<string>;
     makeSettleFundsTransaction(connection: Connection, openOrders: OpenOrders, baseWallet: PublicKey, quoteWallet: PublicKey, referrerQuoteWallet?: PublicKey | null): Promise<{
         transaction: Transaction;
-        signers: Account[];
-        payer: PublicKey;
+        signers: [PublicKey | Account];
     }>;
     matchOrders(connection: Connection, feePayer: Account, limit: number): Promise<string>;
     makeMatchOrdersTransaction(limit: number): Transaction;
@@ -93,7 +91,7 @@ export declare class Market {
 }
 export interface MarketOptions {
     skipPreflight?: boolean;
-    commitment?: Commitment;
+    confirmations?: number;
 }
 export interface OrderParams<T = Account> {
     owner: T;
@@ -125,7 +123,7 @@ export declare class OpenOrders {
     static findForMarketAndOwner(connection: Connection, marketAddress: PublicKey, ownerAddress: PublicKey, programId: PublicKey): Promise<OpenOrders[]>;
     static load(connection: Connection, address: PublicKey, programId: PublicKey): Promise<OpenOrders>;
     static fromAccountInfo(address: PublicKey, accountInfo: AccountInfo<Buffer>, programId: PublicKey): OpenOrders;
-    static makeCreateAccountTransaction(connection: Connection, marketAddress: PublicKey, ownerAddress: PublicKey, newAccountAddress: PublicKey, programId: PublicKey): Promise<TransactionInstruction>;
+    static makeCreateAccountTransaction(connection: Connection, marketAddress: PublicKey, ownerAddress: PublicKey, newAccountAddress: PublicKey, programId: PublicKey): Promise<Transaction>;
     get publicKey(): PublicKey;
 }
 export declare const ORDERBOOK_LAYOUT: any;
