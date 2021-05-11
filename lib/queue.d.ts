@@ -18,4 +18,12 @@ export interface Event {
 }
 export declare function decodeRequestQueue(buffer: Buffer, history?: number): any[];
 export declare function decodeEventQueue(buffer: Buffer, history?: number): Event[];
+export declare const REQUEST_QUEUE_LAYOUT: {
+    HEADER: any;
+    NODE: any;
+};
+export declare const EVENT_QUEUE_LAYOUT: {
+    HEADER: any;
+    NODE: any;
+};
 //# sourceMappingURL=queue.d.ts.map

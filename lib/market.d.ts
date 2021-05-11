@@ -1,7 +1,7 @@
 /// <reference types="node" />
 import { Slab } from './slab';
 import BN from 'bn.js';
-import { Account, AccountInfo, Connection, PublicKey, Transaction, TransactionInstruction } from '@solana/web3.js';
+import { Account, AccountInfo, Commitment, Connection, PublicKey, Transaction, TransactionInstruction } from '@solana/web3.js';
 export declare const _MARKET_STAT_LAYOUT_V1: any;
 export declare const _MARKET_STATE_LAYOUT_V2: any;
 export declare class Market {
@@ -9,12 +9,16 @@ export declare class Market {
     private _baseSplTokenDecimals;
     private _quoteSplTokenDecimals;
     private _skipPreflight;
-    private _confirmations;
+    private _commitment;
     private _programId;
     private _openOrdersAccountsCache;
     private _feeDiscountKeysCache;
     constructor(decoded: any, baseMintDecimals: number, quoteMintDecimals: number, options: MarketOptions | undefined, programId: PublicKey);
     static getLayout(programId: PublicKey): any;
+    static findAccountsByMints(connection: Connection, baseMintAddress: PublicKey, quoteMintAddress: PublicKey, programId: PublicKey): Promise<{
+        publicKey: PublicKey;
+        accountInfo: AccountInfo<Buffer>;
+    }[]>;
     static load(connection: Connection, address: PublicKey, options: MarketOptions | undefined, programId: PublicKey): Promise<Market>;
     get programId(): PublicKey;
     get address(): PublicKey;
@@ -40,10 +44,11 @@ export declare class Market {
         account: AccountInfo<Buffer>;
     }[]>;
     findOpenOrdersAccountsForOwner(connection: Connection, ownerAddress: PublicKey, cacheDurationMs?: number): Promise<OpenOrders[]>;
-    placeOrder(connection: Connection, { owner, payer, side, price, size, orderType, clientId, openOrdersAddressKey, feeDiscountPubkey, }: OrderParams): Promise<string>;
+    placeOrder(connection: Connection, { owner, payer, side, price, size, orderType, clientId, openOrdersAddressKey, openOrdersAccount, feeDiscountPubkey, }: OrderParams): Promise<string>;
     getSplTokenBalanceFromAccountInfo(accountInfo: AccountInfo<Buffer>, decimals: number): number;
     get supportsSrmFeeDiscounts(): boolean;
     get supportsReferralFees(): boolean;
+    get usesRequestQueue(): boolean;
     findFeeDiscountKeys(connection: Connection, ownerAddress: PublicKey, cacheDurationMs?: number): Promise<Array<{
         pubkey: PublicKey;
         feeTier: number;
@@ -54,11 +59,12 @@ export declare class Market {
         pubkey: PublicKey | null;
         feeTier: number;
     }>;
-    makePlaceOrderTransaction<T extends PublicKey | Account>(connection: Connection, { owner, payer, side, price, size, orderType, clientId, openOrdersAddressKey, feeDiscountPubkey, }: OrderParams<T>, cacheDurationMs?: number, feeDiscountPubkeyCacheDurationMs?: number): Promise<{
+    makePlaceOrderTransaction<T extends PublicKey | Account>(connection: Connection, { owner, payer, side, price, size, orderType, clientId, openOrdersAddressKey, openOrdersAccount, feeDiscountPubkey, selfTradeBehavior, }: OrderParams<T>, cacheDurationMs?: number, feeDiscountPubkeyCacheDurationMs?: number): Promise<{
         transaction: Transaction;
-        signers: (Account | T)[];
+        signers: Account[];
+        payer: T;
     }>;
-    makePlaceOrderInstruction<T extends PublicKey | Account>(connection: Connection, { owner, payer, side, price, size, orderType, clientId, openOrdersAddressKey, feeDiscountPubkey, }: OrderParams<T>): TransactionInstruction;
+    makePlaceOrderInstruction<T extends PublicKey | Account>(connection: Connection, { owner, payer, side, price, size, orderType, clientId, openOrdersAddressKey, openOrdersAccount, feeDiscountPubkey, selfTradeBehavior, }: OrderParams<T>): TransactionInstruction;
     private _sendTransaction;
     cancelOrderByClientId(connection: Connection, owner: Account, openOrders: PublicKey, clientId: BN): Promise<string>;
     makeCancelOrderByClientIdTransaction(connection: Connection, owner: PublicKey, openOrders: PublicKey, clientId: BN): Promise<Transaction>;
@@ -68,7 +74,8 @@ export declare class Market {
     settleFunds(connection: Connection, owner: Account, openOrders: OpenOrders, baseWallet: PublicKey, quoteWallet: PublicKey, referrerQuoteWallet?: PublicKey | null): Promise<string>;
     makeSettleFundsTransaction(connection: Connection, openOrders: OpenOrders, baseWallet: PublicKey, quoteWallet: PublicKey, referrerQuoteWallet?: PublicKey | null): Promise<{
         transaction: Transaction;
-        signers: [PublicKey | Account];
+        signers: Account[];
+        payer: PublicKey;
     }>;
     matchOrders(connection: Connection, feePayer: Account, limit: number): Promise<string>;
     makeMatchOrdersTransaction(limit: number): Transaction;
@@ -91,7 +98,7 @@ export declare class Market {
 }
 export interface MarketOptions {
     skipPreflight?: boolean;
-    confirmations?: number;
+    commitment?: Commitment;
 }
 export interface OrderParams<T = Account> {
     owner: T;
@@ -102,7 +109,9 @@ export interface OrderParams<T = Account> {
     orderType?: 'limit' | 'ioc' | 'postOnly';
     clientId?: BN;
     openOrdersAddressKey?: PublicKey;
+    openOrdersAccount?: Account;
     feeDiscountPubkey?: PublicKey | null;
+    selfTradeBehavior?: 'decrementTake' | 'cancelProvide' | 'abortTransaction' | undefined;
 }
 export declare const _OPEN_ORDERS_LAYOUT_V1: any;
 export declare const _OPEN_ORDERS_LAYOUT_V2: any;
@@ -123,7 +132,7 @@ export declare class OpenOrders {
     static findForMarketAndOwner(connection: Connection, marketAddress: PublicKey, ownerAddress: PublicKey, programId: PublicKey): Promise<OpenOrders[]>;
     static load(connection: Connection, address: PublicKey, programId: PublicKey): Promise<OpenOrders>;
     static fromAccountInfo(address: PublicKey, accountInfo: AccountInfo<Buffer>, programId: PublicKey): OpenOrders;
-    static makeCreateAccountTransaction(connection: Connection, marketAddress: PublicKey, ownerAddress: PublicKey, newAccountAddress: PublicKey, programId: PublicKey): Promise<Transaction>;
+    static makeCreateAccountTransaction(connection: Connection, marketAddress: PublicKey, ownerAddress: PublicKey, newAccountAddress: PublicKey, programId: PublicKey): Promise<TransactionInstruction>;
     get publicKey(): PublicKey;
 }
 export declare const ORDERBOOK_LAYOUT: any;
@@ -135,7 +144,8 @@ export declare class Orderbook {
     static get LAYOUT(): any;
     static decode(market: Market, buffer: Buffer): Orderbook;
     getL2(depth: number): [number, number, BN, BN][];
-    [Symbol.iterator](): Generator<Order>;
+    [Symbol.iterator](): Generator<Order, any, unknown>;
+    items(descending?: boolean): Generator<Order>;
 }
 export interface Order {
     orderId: BN;

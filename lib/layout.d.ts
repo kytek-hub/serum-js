@@ -4,6 +4,7 @@ export function u64(property: any): BNLayout;
 export function u128(property: any): BNLayout;
 export function sideLayout(property: any): EnumLayout;
 export function orderTypeLayout(property: any): EnumLayout;
+export function selfTradeBehaviorLayout(property: any): EnumLayout;
 export function accountFlagsLayout(property?: string): any;
 export function setLayoutDecoder(layout: any, decoder: any): void;
 export function setLayoutEncoder(layout: any, encoder: any): any;
