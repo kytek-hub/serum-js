@@ -11,15 +11,6 @@
     "node": ">=10"
   },
   "scripts": {
-    "build": "tsc",
-    "start": "tsc --watch",
-    "clean": "rm -rf lib",
-    "shell": "node -e \"$(< shell)\" -i --experimental-repl-await",
-    "test": "run-s test:unit test:lint test:build",
-    "test:build": "run-s build",
-    "test:lint": "eslint src",
-    "test:unit": "jest",
-    "test:watch": "jest --watch"
   },
   "devDependencies": {
     "@tsconfig/node12": "^1.0.7",
